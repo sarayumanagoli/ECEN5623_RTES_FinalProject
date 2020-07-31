@@ -106,7 +106,7 @@ struct buffer          *buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
-static int              frame_count = 30;
+static int              frame_count = 180;
 int size;
 
 int abortTest=FALSE;
