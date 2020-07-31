@@ -171,7 +171,7 @@ void *Service_1(void *threadp)
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
     syslog(LOG_CRIT, "S1 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
     printf("S1 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
-    while(S1Cnt<=frame_count)
+    while(!abortS1)
     {
         sem_wait(&semS1);
         
@@ -690,7 +690,6 @@ static void stop_capturing(void)
 //Start reading from video0 device
 static void start_capturing(void)
 {
-    printf("\nIn start capturing\n");
         unsigned int i;
         enum v4l2_buf_type type;
 
@@ -765,7 +764,6 @@ static void init_read(unsigned int buffer_size)
 
 static void init_mmap(void)
 {
-    printf("\nIn init mmap\n");
         struct v4l2_requestbuffers req;
 
         CLEAR(req);
@@ -828,7 +826,6 @@ static void init_mmap(void)
 
 static void init_userp(unsigned int buffer_size)
 {
-    printf("\nIn init userp\n");
         struct v4l2_requestbuffers req;
 
         CLEAR(req);
@@ -869,7 +866,6 @@ static void init_userp(unsigned int buffer_size)
 //Initialise video0 device
 static void init_device(void)
 {
-    printf("\nIn init device\n");
     struct v4l2_capability cap;
     struct v4l2_cropcap cropcap;
     struct v4l2_crop crop;
@@ -1015,7 +1011,6 @@ static void init_device(void)
 
 static void uninit_device(void)
 {
-    printf("\nIn uninit device\n");
 int i;
         switch (io) {
         case IO_METHOD_READ:
@@ -1040,7 +1035,7 @@ int i;
 
 static void open_device(void)
 {
-    printf("\nIn open device\n");
+    
         struct stat st;
 
         if (-1 == stat(dev_name, &st)) {
@@ -1065,7 +1060,6 @@ static void open_device(void)
 
 static void usage(FILE *fp, int argc, char **argv)
 {
-    printf("\nIn usage\n");
         fprintf(fp,
                  "Usage: %s [options]\n\n"
                  "Version 1.3\n"
@@ -1099,7 +1093,6 @@ long_options[] = {
 
 static void close_device(void)
 {
-    printf("\nIn close device\n");
         if (-1 == close(fd))
                 errno_exit("close");
 
@@ -1183,7 +1176,7 @@ void *Sequencer(void *threadp)
     sem_post(&semS1); 
     sem_post(&semS2); 
     
-   // abortS1=TRUE; 
+   abortS1=TRUE; 
    // abortS2=TRUE;
 
     pthread_exit((void *)0);
