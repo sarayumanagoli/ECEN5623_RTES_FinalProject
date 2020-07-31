@@ -57,7 +57,7 @@
 #define NSEC_PER_SEC (1000000000)
 #define MY_CLOCK_TYPE CLOCK_MONOTONIC_RAW
 
-sem_t semS1,semS2,semS3;
+sem_t semS1,semS2;
 
 //selection between various transforms
 
@@ -172,9 +172,9 @@ void *Service_1(void *threadp)
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
     syslog(LOG_CRIT, "S1 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
 
-    while(!abortS1)
+    while(S1Cnt<frame_count)
     {
-        sem_wait(&semS1);
+       // sem_wait(&semS1);
         
         mainloop();
         
@@ -229,9 +229,9 @@ void *Service_2(void *threadp)
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
     syslog(LOG_CRIT, "S2 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
 
-    while(!abortS2)
+    while(S2Cnt<frame_count)
     {
-        sem_wait(&semS2);
+       //sem_wait(&semS2);
         
         dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time);
         
@@ -1156,19 +1156,21 @@ void *Sequencer(void *threadp)
         // Release each service at a sub-rate of the generic sequencer rate
 
         // Servcie_1 = RT_MAX-1	@ 1 Hz
-        if((seqCnt % 100) == 0) sem_post(&semS1);
+        if((seqCnt % 1) == 0) sem_post(&semS1);
 
         // Service_2 = RT_MAX-2	@ 1 Hz
-        if((seqCnt % 100) == 0) sem_post(&semS2);
+        if((seqCnt % 1) == 0) sem_post(&semS2);
 
         //gettimeofday(&current_time_val, (struct timezone *)0);
         //syslog(LOG_CRIT, "Sequencer release all sub-services @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
 
     } while(!abortTest && (seqCnt < threadParams->sequencePeriods));
 
-    sem_post(&semS1); sem_post(&semS2); 
+    sem_post(&semS1); 
+    sem_post(&semS2); 
     
-    abortS1=TRUE; abortS2=TRUE;
+   // abortS1=TRUE; 
+   // abortS2=TRUE;
    
 
     pthread_exit((void *)0);
@@ -1313,8 +1315,6 @@ int main(int argc, char **argv)
     init_device();
     start_capturing();
 
-    CPU_ZERO(&threadcpu);
-    CPU_SET(1, &threadcpu);
     rt_param[1].sched_priority=rt_max_prio-1;
     pthread_attr_setschedparam(&rt_sched_attr[1], &rt_param[1]);
     rc=pthread_create(&threads[1], &rt_sched_attr[1], Service_1, (void *)&(threadParams[1]));
@@ -1323,8 +1323,6 @@ int main(int argc, char **argv)
     else
         printf("pthread_create successful for service 1\n");
         
-    CPU_ZERO(&threadcpu);
-    CPU_SET(1, &threadcpu);
     rt_param[2].sched_priority=rt_max_prio-2;
     pthread_attr_setschedparam(&rt_sched_attr[2], &rt_param[2]);
     rc=pthread_create(&threads[2], &rt_sched_attr[2], Service_2, (void *)&(threadParams[2]));
@@ -1335,12 +1333,8 @@ int main(int argc, char **argv)
         
         
     printf("Start sequencer\n");
-    threadParams[0].sequencePeriods=2000; 
-    
-    CPU_ZERO(&threadcpu);
-    CPU_SET(1, &threadcpu);
-    rc=pthread_attr_setaffinity_np(&rt_sched_attr[0], sizeof(cpu_set_t), &threadcpu);
-       
+    //threadParams[0].sequencePeriods=2000; 
+           
     rt_param[0].sched_priority=rt_max_prio;
     pthread_attr_setschedparam(&rt_sched_attr[0], &rt_param[0]);
     rc=pthread_create(&threads[0], &rt_sched_attr[0], Sequencer, (void *)&(threadParams[0]));
@@ -1349,15 +1343,15 @@ int main(int argc, char **argv)
     else
         printf("pthread_create successful for sequencer\n");
 
-    
+    //Join to wait for completion of thread execution
+    for(i=0;i<NUM_THREADS;i++)
+       pthread_join(threads[i], NULL);
     
     stop_capturing();
     uninit_device();
     close_device();
     fprintf(stderr, "\n");
     
-    //Join to wait for completion of thread execution
-    for(i=0;i<NUM_THREADS;i++)
-       pthread_join(threads[i], NULL);
+    
     return 0;
 }
