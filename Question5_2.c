@@ -41,6 +41,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <syslog.h>
 #include <semaphore.h>
 #include <sched.h>
 
@@ -54,21 +55,20 @@
 #define ERROR (-1)
 #define OK (0)
 #define NSEC_PER_SEC (1000000000)
+#define MY_CLOCK_TYPE CLOCK_MONOTONIC_RAW
 
+sem_t semS1,semS2;
 
 //selection between various transforms
 
 #define SHARPEN
-//#define BW
-//#define GRAY
 
 //definition of threads
 typedef struct
 {
-    int threadIdx;
-    int timeperiod;
+	int threadIdx;
+	unsigned long long sequencePeriods;
 } threadParams_t;
-
 
 //declarations
 unsigned int framecnt=0;
@@ -76,6 +76,8 @@ struct timespec frame_time;
 int flag = 0;
 double deadline;
 unsigned char bigbuffer[(640*480*3)];
+struct timespec start_time_val;
+double start_realtime;
 
 
 //to calculate the time difference for jitters
@@ -91,6 +93,14 @@ enum io_method
 };
 
 #define RATE (1.2)
+#define USEC_PER_MSEC (1000)
+#define NANOSEC_PER_MSEC (1000000)
+#define NANOSEC_PER_SEC (1000000000)
+#define NUM_THREADS (3)
+
+#define TRUE (1)
+#define FALSE (0)
+
 static char            *dev_name;
 //static enum io_method   io = IO_METHOD_USERPTR;
 //static enum io_method   io = IO_METHOD_READ;
@@ -100,7 +110,11 @@ struct buffer          *buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
-static int              frame_count = 90;
+static int              frame_count = 30;
+int size;
+
+int abortTest=FALSE;
+int abortS1=FALSE, abortS2=FALSE, abortS3=FALSE;
 
 static void mainloop(void);
 
@@ -141,9 +155,43 @@ struct buffer
         size_t  length;
 };
 
+double realtime(struct timespec *tsptr)
+{
+    return ((double)(tsptr->tv_sec) + (((double)tsptr->tv_nsec)/1000000000.0));
+}
+
+void *Service_1(void *threadp)
+{
+    printf("\n*********************In service 1****************************\n");
+    struct timespec current_time_val;
+    double current_realtime;
+    unsigned long long S1Cnt=0;
+    threadParams_t *threadParams = (threadParams_t *)threadp;
+
+    clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
+    syslog(LOG_CRIT, "S1 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
+    printf("S1 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
+    while(S1Cnt<=frame_count)
+    {
+        sem_wait(&semS1);
+        
+        mainloop();
+        
+        S1Cnt++;
+        syslog(LOG_INFO,"\nS1Cnt = %d\n",S1Cnt);
+        printf("\nS1Cnt = %d\n",S1Cnt);
+        clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
+        syslog(LOG_CRIT, "S1 50 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S1Cnt, current_realtime-start_realtime);
+        printf("S1 50 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S1Cnt, current_realtime-start_realtime);
+    }
+
+    pthread_exit((void *)0);
+}
+
 //PPM image format
 static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec *time)
 {
+    printf("In dump_ppm\n");
     struct utsname hostname;
     char timestampbuffer[100] = "\0";
     int written, i, total, dumpfd;
@@ -170,6 +218,38 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
     close(dumpfd);
     
 }
+
+void *Service_2(void *threadp)
+{
+    printf("\n******************In service 2*********************\n");
+    struct timespec current_time_val;
+    double current_realtime;
+    unsigned long long S2Cnt=0;
+    threadParams_t *threadParams = (threadParams_t *)threadp;
+
+    clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
+    syslog(LOG_CRIT, "S2 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
+    printf("S2 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
+
+    while(S2Cnt<=frame_count)
+    {
+        sem_wait(&semS2);
+        
+        dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time);
+        
+        S2Cnt++;
+        syslog(LOG_INFO,"\nS2Cnt = %d\n",S2Cnt);
+        printf("\nS2Cnt = %d\n",S2Cnt);
+        clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
+        syslog(LOG_CRIT, "S2 20 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S2Cnt, current_realtime-start_realtime);
+        printf("S2 20 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S2Cnt, current_realtime-start_realtime);
+    }
+
+    pthread_exit((void *)0);
+}
+
+
+
 
 //PGM image format
 static void dump_pgm(const void *p, int size, unsigned int tag, struct timespec *time)
@@ -236,19 +316,6 @@ int delta_t(struct timespec *stop, struct timespec *start, struct timespec *delt
   return(OK);
 }
 
-
-//Thread calling funtion for all the transforms
-void *ThreadTransform(void *threadp)
-{
-	threadParams_t *threadParams = (threadParams_t *)threadp;
-	printf("Prototype Analysis\n");
-    //Deadline is calculated for each of the frames
-    mainloop();
-    //jitter calculation flag
-    flag = 1;
-	mainloop();
-}
-
 void print_scheduler(void)
 {
    int schedType;
@@ -269,66 +336,6 @@ void print_scheduler(void)
        printf("Pthread Policy is UNKNOWN\n");
    }
 }
-
-//Function for BW transformation
-void blackwhite_image(const void *image_pointer,int dimension)
-{
-    int k;
-	unsigned char *pptr = (unsigned char *)image_pointer;
-	for(k=0;k<dimension;k++)
-	{
-		if(pptr[k] < 100) //100 is the pixel value
-		{
-			pptr[k] = 0; //black
-		}
-		else
-		{
-			pptr[k] = 255; //white
-		}
-	}
-}
-
-//all transformations are done here
-/*void transform(const void *p, int size)
-{
-    int i,j,k;
-    int y_temp, y2_temp, u_temp, v_temp;
-    unsigned char *pptr = (unsigned char *)p;
-#ifdef SHARPEN
-    for(i=0, k=0; i<size; i=i+4, k=k+6)
-    {
-        y_temp=(int)pptr[i]; u_temp=(int)pptr[i+1]; y2_temp=(int)pptr[i+2]; v_temp=(int)pptr[i+3];
-        yuv2rgb(y_temp, u_temp, v_temp, &bigbuffer[k], &bigbuffer[k+1], &bigbuffer[k+2]);
-        yuv2rgb(y2_temp, u_temp, v_temp, &bigbuffer[k+3], &bigbuffer[k+4], &bigbuffer[k+5]);
-    }
-   // sharpening(bigbuffer,((size*6)/4));
-    dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time);
-#endif
-#ifdef BW
-// Pixels are YU and YV alternating, so YUYV which is 4 bytes
-// We want Y, so YY which is 2 bytes
-//
-    for(i=0, k=0; i<size; i=i+4, k=k+2)
-    {
-    // Y1=first byte and Y2=third byte
-    bigbuffer[k]=pptr[i];
-    bigbuffer[k+1]=pptr[i+2];
-    }
-    blackwhite_image(bigbuffer,(size/2));
-    dump_pgm(bigbuffer, (size/2), framecnt, &frame_time);
-#endif
-
-#ifdef GRAY
-    for(i=0, k=0; i<size; i=i+4, k=k+2)
-    {
-            // Y1=first byte and Y2=third byte
-            bigbuffer[k]=pptr[i];
-            bigbuffer[k+1]=pptr[i+2];
-    }
-    dump_pgm(bigbuffer, (size/2), framecnt, &frame_time);
-#endif
-
-}*/
 
 static void errno_exit(const char *s)
 {
@@ -412,87 +419,9 @@ void yuv2rgb(int y, int u, int v, unsigned char *r, unsigned char *g, unsigned c
 }
 
 
-/*Function: Sharpening
- *Description: Sharpens the input image provided through pointer p and for the size specified*/
-void sharpening(const void *p, int size)
-{
-    int i,j,k;
-    FLOAT temp;
-    unsigned char R[VRES*HRES];
-    unsigned char G[VRES*HRES];
-    unsigned char B[VRES*HRES];
-    unsigned char convR[VRES*HRES];
-    unsigned char convG[VRES*HRES];
-    unsigned char convB[VRES*HRES];
-
-    for(i=0,k=0; i<size; (i=i+3),k++)
-    {
-        R[k]=*((unsigned char *)(p+i));
-        G[k]=*((unsigned char *)(p+i+1));
-        B[k]=*((unsigned char *)(p+i+2));
-    }
-
-    // Skip first and last row, no neighbors to convolve with
-    for(i=1; i<((VRES)-1); i++)
-    {
-        // Skip first and last column, no neighbors to convolve with
-        for(j=1; j<((HRES)-1); j++)
-        {
-            temp=0;
-            temp += (PSF[0] * (FLOAT)R[((i-1)*HRES)+j-1]);
-            temp += (PSF[1] * (FLOAT)R[((i-1)*HRES)+j]);
-            temp += (PSF[2] * (FLOAT)R[((i-1)*HRES)+j+1]);
-            temp += (PSF[3] * (FLOAT)R[((i)*HRES)+j-1]);
-            temp += (PSF[4] * (FLOAT)R[((i)*HRES)+j]);
-            temp += (PSF[5] * (FLOAT)R[((i)*HRES)+j+1]);
-            temp += (PSF[6] * (FLOAT)R[((i+1)*HRES)+j-1]);
-            temp += (PSF[7] * (FLOAT)R[((i+1)*HRES)+j]);
-            temp += (PSF[8] * (FLOAT)R[((i+1)*HRES)+j+1]);
-	    if(temp<0.0) temp=0.0;
-	    if(temp>255.0) temp=255.0;
-	    convR[(i*HRES)+j]=(unsigned char)temp;
-
-            temp=0;
-            temp += (PSF[0] * (FLOAT)G[((i-1)*HRES)+j-1]);
-            temp += (PSF[1] * (FLOAT)G[((i-1)*HRES)+j]);
-            temp += (PSF[2] * (FLOAT)G[((i-1)*HRES)+j+1]);
-            temp += (PSF[3] * (FLOAT)G[((i)*HRES)+j-1]);
-            temp += (PSF[4] * (FLOAT)G[((i)*HRES)+j]);
-            temp += (PSF[5] * (FLOAT)G[((i)*HRES)+j+1]);
-            temp += (PSF[6] * (FLOAT)G[((i+1)*HRES)+j-1]);
-            temp += (PSF[7] * (FLOAT)G[((i+1)*HRES)+j]);
-            temp += (PSF[8] * (FLOAT)G[((i+1)*HRES)+j+1]);
-	    if(temp<0.0) temp=0.0;
-	    if(temp>255.0) temp=255.0;
-	    convG[(i*HRES)+j]=(unsigned char)temp;
-
-            temp=0;
-            temp += (PSF[0] * (FLOAT)B[((i-1)*HRES)+j-1]);
-            temp += (PSF[1] * (FLOAT)B[((i-1)*HRES)+j]);
-            temp += (PSF[2] * (FLOAT)B[((i-1)*HRES)+j+1]);
-            temp += (PSF[3] * (FLOAT)B[((i)*HRES)+j-1]);
-            temp += (PSF[4] * (FLOAT)B[((i)*HRES)+j]);
-            temp += (PSF[5] * (FLOAT)B[((i)*HRES)+j+1]);
-            temp += (PSF[6] * (FLOAT)B[((i+1)*HRES)+j-1]);
-            temp += (PSF[7] * (FLOAT)B[((i+1)*HRES)+j]);
-            temp += (PSF[8] * (FLOAT)B[((i+1)*HRES)+j+1]);
-	  if(temp<0.0) temp=0.0;
-	    if(temp>255.0) temp=255.0;
-	    convB[(i*HRES)+j]=(unsigned char)temp;
-        }
-    }
-
-    for(i=0,k=0; k<size; i++,(k=k+3))
-    {
-        *((unsigned char *)(p+k))=convR[i];
-        *((unsigned char *)(p+k+1))=convG[i];
-        *((unsigned char *)(p+k+2))=convB[i];
-    }
-
-}
-
 static void process_image(const void *p, int size)
 {
+    printf("\nIn process image\n");
     int i, k, newsize=0;
     unsigned char *pptr = (unsigned char *)p;
 
@@ -523,7 +452,6 @@ static void process_image(const void *p, int size)
         yuv2rgb(y_temp, u_temp, v_temp, &bigbuffer[k], &bigbuffer[k+1], &bigbuffer[k+2]);
         yuv2rgb(y2_temp, u_temp, v_temp, &bigbuffer[k+3], &bigbuffer[k+4], &bigbuffer[k+5]);
     }
-   // sharpening(bigbuffer,((size*6)/4));
     dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time);
     }
 
@@ -544,6 +472,7 @@ static void process_image(const void *p, int size)
 //Each frame is read
 static int read_frame(void)
 {
+    printf("\nIn read frame\n");
     struct v4l2_buffer buf;
     unsigned int i;
 
@@ -648,6 +577,7 @@ static int read_frame(void)
 
 static void mainloop(void)
 {
+    printf("In mainloop\n");
     unsigned int count;
     float rate = 0;
     struct timespec read_delay;
@@ -655,8 +585,8 @@ static void mainloop(void)
 	double worst_exec=0;
     int frame_number = 0;
 
-    read_delay.tv_sec=1;
-    read_delay.tv_nsec=0;
+    read_delay.tv_sec=0;
+    read_delay.tv_nsec=30000;
 	
 	rate = RATE;
 
@@ -673,7 +603,7 @@ static void mainloop(void)
             FD_SET(fd, &fds);
 
             /* Timeout. */
-            tv.tv_sec = 2;
+            tv.tv_sec = 10;
             tv.tv_usec = 0;
 
             r = select(fd + 1, &fds, NULL, NULL, &tv);
@@ -760,6 +690,7 @@ static void stop_capturing(void)
 //Start reading from video0 device
 static void start_capturing(void)
 {
+    printf("\nIn start capturing\n");
         unsigned int i;
         enum v4l2_buf_type type;
 
@@ -834,6 +765,7 @@ static void init_read(unsigned int buffer_size)
 
 static void init_mmap(void)
 {
+    printf("\nIn init mmap\n");
         struct v4l2_requestbuffers req;
 
         CLEAR(req);
@@ -896,6 +828,7 @@ static void init_mmap(void)
 
 static void init_userp(unsigned int buffer_size)
 {
+    printf("\nIn init userp\n");
         struct v4l2_requestbuffers req;
 
         CLEAR(req);
@@ -936,6 +869,7 @@ static void init_userp(unsigned int buffer_size)
 //Initialise video0 device
 static void init_device(void)
 {
+    printf("\nIn init device\n");
     struct v4l2_capability cap;
     struct v4l2_cropcap cropcap;
     struct v4l2_crop crop;
@@ -1081,6 +1015,7 @@ static void init_device(void)
 
 static void uninit_device(void)
 {
+    printf("\nIn uninit device\n");
 int i;
         switch (io) {
         case IO_METHOD_READ:
@@ -1105,6 +1040,7 @@ int i;
 
 static void open_device(void)
 {
+    printf("\nIn open device\n");
         struct stat st;
 
         if (-1 == stat(dev_name, &st)) {
@@ -1129,6 +1065,7 @@ static void open_device(void)
 
 static void usage(FILE *fp, int argc, char **argv)
 {
+    printf("\nIn usage\n");
         fprintf(fp,
                  "Usage: %s [options]\n\n"
                  "Version 1.3\n"
@@ -1162,20 +1099,111 @@ long_options[] = {
 
 static void close_device(void)
 {
+    printf("\nIn close device\n");
         if (-1 == close(fd))
                 errno_exit("close");
 
         fd = -1;
 }
+
+
+void *Sequencer(void *threadp)
+{
+    printf("\n********************In sequencer********************\n");
+    struct timeval current_time_val;
+    struct timespec delay_time = {0,33333333}; // delay for 33.33 msec, 30 Hz
+    struct timespec remaining_time;
+    double current_time;
+    double residual;
+    int rc, delay_cnt=0;
+    unsigned long long seqCnt=0;
+    threadParams_t *threadParams = (threadParams_t *)threadp;
+
+    gettimeofday(&current_time_val, (struct timezone *)0);
+    syslog(LOG_CRIT, "Sequencer thread @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
+    printf("Sequencer thread @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
+
+    do
+    {
+        delay_cnt=0; residual=0.0;
+
+        //gettimeofday(&current_time_val, (struct timezone *)0);
+        //syslog(LOG_CRIT, "Sequencer thread prior to delay @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
+        do
+        {
+            rc=nanosleep(&delay_time, &remaining_time);
+
+            if(rc == EINTR)
+            { 
+                residual = remaining_time.tv_sec + ((double)remaining_time.tv_nsec / (double)NANOSEC_PER_SEC);
+
+                if(residual > 0.0) printf("residual=%lf, sec=%d, nsec=%d\n", residual, (int)remaining_time.tv_sec, (int)remaining_time.tv_nsec);
+ 
+                delay_cnt++;
+            }
+            else if(rc < 0)
+            {
+                perror("Sequencer nanosleep");
+                exit(-1);
+            }
+           
+        } while((residual > 0.0) && (delay_cnt < 100));
+
+        
+        gettimeofday(&current_time_val, (struct timezone *)0);
+        syslog(LOG_CRIT, "Sequencer cycle %llu @ sec=%d, msec=%d\n", seqCnt, (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
+
+        if(delay_cnt > 1) printf("Sequencer looping delay %d\n", delay_cnt);
+
+        // Release each service at a sub-rate of the generic sequencer rate
+
+        // Servcie_1 = RT_MAX-1	@ 1 Hz
+        if((seqCnt % 1) == 0) 
+        {
+            printf("\nIn SEM_POST for 1\n");
+            sem_post(&semS1);
+        }
+        // Service_2 = RT_MAX-2	@ 1 Hz
+        if((seqCnt % 1) == 0)
+        {
+            printf("\nIn SEM_POST for 2\n");
+            sem_post(&semS2);
+        }
+        
+        seqCnt++;
+        
+        syslog(LOG_INFO,"\nseqCnt = %d\n",seqCnt);
+        printf("\nseqCnt = %d\n",seqCnt);
+        
+        //gettimeofday(&current_time_val, (struct timezone *)0);
+        //syslog(LOG_CRIT, "Sequencer release all sub-services @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
+
+    } while(!abortTest && (seqCnt < frame_count));
+
+    sem_post(&semS1); 
+    sem_post(&semS2); 
+    
+   // abortS1=TRUE; 
+   // abortS2=TRUE;
+
+    pthread_exit((void *)0);
+}
+
+
+
 int main(int argc, char **argv)
 {
-	int rc;
-	pthread_t imagethread[1];
+	int i,rc,scope;
+    cpu_set_t threadcpu;
+	pthread_t threads[NUM_THREADS];
 	threadParams_t threadParams[1];
 	pthread_attr_t rt_sched_attr[1];
 	int rt_max_prio, rt_min_prio;
 	struct sched_param rt_param[1];
 	struct sched_param main_param;
+    pid_t mainpid;
+    cpu_set_t allcpuset;
+
 	pthread_attr_t main_attr;
     dev_name = "/dev/video0";
     HRES = atoi(argv[1]);
@@ -1185,49 +1213,7 @@ int main(int argc, char **argv)
     strncpy(vres_string,argv[2],sizeof(vres_string));
     sprintf(ppm_header,"P6\n#9999999999 sec 9999999999 msec \n%s %s\n255\n",hres_string,vres_string);
     sprintf(pgm_header,"P5\n#9999999999 sec 9999999999 msec \n%s %s\n255\n",hres_string,vres_string);
-    #ifdef SHARPEN
-		printf("Image transformation selected is:\nSHARPENING\n");
-    #endif
-    #ifdef BW
-		printf("Image transformation selected is:\nBLACK AND WHITE\n");
-    #endif
-    #ifdef GRAY
-		printf("Image transformation selected is:\nGRAYSCALE\n");
-    #endif
-	
-	printf("Before adjustments to scheduling policy:\n");
-	print_scheduler();
 
-	pthread_attr_init(&main_sched_attr);
-	pthread_attr_setinheritsched(&main_sched_attr, PTHREAD_EXPLICIT_SCHED);
-	pthread_attr_setschedpolicy(&main_sched_attr, SCHED_FIFO);
-
-	rt_max_prio = sched_get_priority_max(SCHED_FIFO);
-	rt_min_prio = sched_get_priority_min(SCHED_FIFO);
-
-	main_param.sched_priority = rt_max_prio;
-	rc=sched_setscheduler(getpid(), SCHED_FIFO, &main_param);
-
-
-	if (rc)
-	{
-	   printf("ERROR; sched_setscheduler rc is %d\n", rc);
-	   perror("sched_setschduler"); exit(-1);
-	}
-
-	printf("After adjustments to scheduling policy:\n");
-	print_scheduler();
-
-	pthread_attr_setschedparam(&main_sched_attr, &main_param);
-    rc=pthread_attr_init(&rt_sched_attr[0]);
-    rc=pthread_attr_setinheritsched(&rt_sched_attr[0], PTHREAD_EXPLICIT_SCHED);
-    rc=pthread_attr_setschedpolicy(&rt_sched_attr[0], SCHED_FIFO);
-
-    rt_param[0].sched_priority=rt_max_prio;
-    pthread_attr_setschedparam(&rt_sched_attr[0], &rt_param[0]);
-
-    threadParams[0].threadIdx=0;
-	
 	for (;;)
     {
         int idx;
@@ -1284,23 +1270,98 @@ int main(int argc, char **argv)
                 exit(EXIT_FAILURE);
         }
     }
+    
+    if (sem_init (&semS1, 0, 0)) { printf ("Failed to initialize S1 semaphore\n"); exit (-1); }
+    if (sem_init (&semS2, 0, 0)) { printf ("Failed to initialize S2 semaphore\n"); exit (-1); }
+    
+     mainpid=getpid();
+
+    rt_max_prio = sched_get_priority_max(SCHED_FIFO);
+    rt_min_prio = sched_get_priority_min(SCHED_FIFO);
+
+    rc=sched_getparam(mainpid, &main_param);
+    main_param.sched_priority=rt_max_prio;
+    rc=sched_setscheduler(getpid(), SCHED_FIFO, &main_param);
+    if(rc < 0) perror("main_param");
+    print_scheduler();
+
+
+    pthread_attr_getscope(&main_attr, &scope);
+
+    if(scope == PTHREAD_SCOPE_SYSTEM)
+      printf("PTHREAD SCOPE SYSTEM\n");
+    else if (scope == PTHREAD_SCOPE_PROCESS)
+      printf("PTHREAD SCOPE PROCESS\n");
+    else
+      printf("PTHREAD SCOPE UNKNOWN\n");
+
+    printf("rt_max_prio=%d\n", rt_max_prio);
+    printf("rt_min_prio=%d\n", rt_min_prio);
+
+    for(i=0; i < NUM_THREADS; i++)
+    {
+      rc=pthread_attr_init(&rt_sched_attr[i]);
+      rc=pthread_attr_setinheritsched(&rt_sched_attr[i], PTHREAD_EXPLICIT_SCHED);
+      rc=pthread_attr_setschedpolicy(&rt_sched_attr[i], SCHED_FIFO);
+      pthread_attr_setschedparam(&rt_sched_attr[i], &rt_param[i]);
+
+      threadParams[i].threadIdx=i;
+    }
+   
+    printf("Service threads will run on %d CPU cores\n", CPU_COUNT(&threadcpu));
 
     open_device();
     init_device();
     start_capturing();
-
-
-    rc=pthread_create(&imagethread[0], &rt_sched_attr[0],         
-					//(void *)0,               // default attributes
-					ThreadTransform, (void *)&(threadParams[0])
-					);
-
+    
+    CPU_ZERO(&threadcpu);
+    CPU_SET(3, &threadcpu);
+    
+    rc=pthread_attr_setaffinity_np(&rt_sched_attr[1], sizeof(cpu_set_t), &threadcpu);
+    
+    rt_param[1].sched_priority=rt_max_prio-1;
+    rc=pthread_create(&threads[1], &rt_sched_attr[1], Service_1, (void *)&(threadParams[1]));
+    if(rc < 0)
+        perror("pthread_create for service 1");
+    else
+        printf("pthread_create successful for service 1\n"); 
+    
+    printf("Start sequencer\n");
+    threadParams[0].sequencePeriods=900;  
+        
+    CPU_ZERO(&threadcpu);
+    CPU_SET(3, &threadcpu);
+    
+    rc=pthread_attr_setaffinity_np(&rt_sched_attr[0], sizeof(cpu_set_t), &threadcpu);
+    rt_param[0].sched_priority=rt_max_prio;
+    
+    rc=pthread_create(&threads[0], &rt_sched_attr[0], Sequencer, (void *)&(threadParams[0]));
+    if(rc < 0)
+        perror("pthread_create for sequencer");
+    else
+        printf("pthread_create successful for sequencer\n");
+    
+        
+    CPU_ZERO(&threadcpu);
+    CPU_SET(3, &threadcpu);
+    
+    rc=pthread_attr_setaffinity_np(&rt_sched_attr[2], sizeof(cpu_set_t), &threadcpu);
+    rt_param[2].sched_priority=rt_max_prio-2;
+    rc=pthread_create(&threads[2], &rt_sched_attr[2], Service_2, (void *)&(threadParams[2]));
+    if(rc < 0)
+        perror("pthread_create for service 2");
+    else
+        printf("pthread_create successful for service 2\n");
+    
+    
     //Join to wait for completion of thread execution
-    pthread_join(imagethread[0], NULL);
-
+    for(i=0;i<NUM_THREADS;i++)
+       pthread_join(threads[i], NULL);
+    
     stop_capturing();
     uninit_device();
     close_device();
     fprintf(stderr, "\n");
+
     return 0;
 }
