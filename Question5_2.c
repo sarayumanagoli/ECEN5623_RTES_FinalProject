@@ -56,12 +56,15 @@
 #define OK (0)
 #define NSEC_PER_SEC (1000000000)
 #define MY_CLOCK_TYPE CLOCK_MONOTONIC_RAW
-
-sem_t semS1,semS2;
-
-//selection between various transforms
-
+#define RATE (1.2)
+#define USEC_PER_MSEC (1000)
+#define NANOSEC_PER_MSEC (1000000)
+#define NANOSEC_PER_SEC (1000000000)
+#define NUM_THREADS (3)
+#define TRUE (1)
+#define FALSE (0)
 #define SHARPEN
+
 
 //definition of threads
 typedef struct
@@ -78,7 +81,8 @@ double deadline;
 unsigned char bigbuffer[(640*480*3)];
 struct timespec start_time_val;
 double start_realtime;
-
+sem_t semS1,semS2;
+int g_size;
 
 //to calculate the time difference for jitters
 static struct timespec img = {0, 0};
@@ -92,14 +96,6 @@ enum io_method
         IO_METHOD_USERPTR,
 };
 
-#define RATE (1.2)
-#define USEC_PER_MSEC (1000)
-#define NANOSEC_PER_MSEC (1000000)
-#define NANOSEC_PER_SEC (1000000000)
-#define NUM_THREADS (3)
-
-#define TRUE (1)
-#define FALSE (0)
 
 static char            *dev_name;
 //static enum io_method   io = IO_METHOD_USERPTR;
@@ -178,7 +174,7 @@ void *Service_1(void *threadp)
         mainloop();
         
         S1Cnt++;
-        syslog(LOG_INFO,"\nS1Cnt = %d\n",S1Cnt);
+        syslog(LOG_INFO,"S1Cnt = %d",S1Cnt);
         printf("\nS1Cnt = %d\n",S1Cnt);
         clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
         syslog(LOG_CRIT, "S1 50 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S1Cnt, current_realtime-start_realtime);
@@ -235,10 +231,10 @@ void *Service_2(void *threadp)
     {
         sem_wait(&semS2);
         
-        dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time);
+        dump_ppm(bigbuffer, g_size, framecnt, &frame_time);
         
         S2Cnt++;
-        syslog(LOG_INFO,"\nS2Cnt = %d\n",S2Cnt);
+        syslog(LOG_INFO,"S2Cnt = %d",S2Cnt);
         printf("\nS2Cnt = %d\n",S2Cnt);
         clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
         syslog(LOG_CRIT, "S2 20 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S2Cnt, current_realtime-start_realtime);
@@ -247,35 +243,6 @@ void *Service_2(void *threadp)
 
     pthread_exit((void *)0);
 }
-
-
-
-
-//PGM image format
-static void dump_pgm(const void *p, int size, unsigned int tag, struct timespec *time)
-{
-    int written, i, total, dumpfd;
-   
-    snprintf(&pgm_dumpname[4], 9, "%08d", tag);
-    strncat(&pgm_dumpname[12], ".pgm", 5);
-    dumpfd = open(pgm_dumpname, O_WRONLY | O_NONBLOCK | O_CREAT, 00666);
-
-    snprintf(&pgm_header[4], 11, "%010d", (int)time->tv_sec);
-    strncat(&pgm_header[14], " sec ", 5);
-    snprintf(&pgm_header[19], 11, "%010d", (int)((time->tv_nsec)/1000000));
-    written=write(dumpfd, pgm_header, sizeof(pgm_header));
-
-    total=0;
-
-    do
-    {
-        written=write(dumpfd, p, size);
-        total+=written;
-    } while(total < size);
-    close(dumpfd);
-    
-}
-
 
 int delta_t(struct timespec *stop, struct timespec *start, struct timespec *delta_t)
 {
@@ -418,7 +385,6 @@ void yuv2rgb(int y, int u, int v, unsigned char *r, unsigned char *g, unsigned c
    *b = b1 ;
 }
 
-
 static void process_image(const void *p, int size)
 {
     printf("\nIn process image\n");
@@ -433,38 +399,15 @@ static void process_image(const void *p, int size)
     // This just dumps the frame to a file now, but you could replace with whatever image
     // processing you wish.
     //
-
-    if(fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_GREY)
-    {
-        printf("Dump graymap as-is size %d\n", size);
-        dump_pgm(p, size, framecnt, &frame_time);
-    }
-
-    else if(fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV)
-    {
-
-       int i,j,k;
     int y_temp, y2_temp, u_temp, v_temp;
-    unsigned char *pptr = (unsigned char *)p;
     for(i=0, k=0; i<size; i=i+4, k=k+6)
     {
         y_temp=(int)pptr[i]; u_temp=(int)pptr[i+1]; y2_temp=(int)pptr[i+2]; v_temp=(int)pptr[i+3];
         yuv2rgb(y_temp, u_temp, v_temp, &bigbuffer[k], &bigbuffer[k+1], &bigbuffer[k+2]);
         yuv2rgb(y2_temp, u_temp, v_temp, &bigbuffer[k+3], &bigbuffer[k+4], &bigbuffer[k+5]);
     }
-    dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time);
-    }
-
-    else if(fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_RGB24)
-    {
-        printf("Dump RGB as-is size %d\n", size);
-        dump_ppm(p, size, framecnt, &frame_time);
-    }
-    else
-    {
-        printf("ERROR - unknown dump format\n");
-    }
-
+    //dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time);
+    g_size = (size*6)/4;
     fflush(stderr);
     fflush(stdout);
 }
@@ -603,7 +546,7 @@ static void mainloop(void)
             FD_SET(fd, &fds);
 
             /* Timeout. */
-            tv.tv_sec = 10;
+            tv.tv_sec = 2;
             tv.tv_usec = 0;
 
             r = select(fd + 1, &fds, NULL, NULL, &tv);
@@ -960,15 +903,6 @@ static void init_device(void)
 
         // This one work for Logitech C200
         fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
-
-        //fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;
-        //fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_VYUY;
-
-        // Would be nice if camera supported
-        //fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_GREY;
-        //fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
-
-        //fmt.fmt.pix.field       = V4L2_FIELD_INTERLACED;
         fmt.fmt.pix.field       = V4L2_FIELD_NONE;
 
         if (-1 == xioctl(fd, VIDIOC_S_FMT, &fmt))
@@ -1104,7 +1038,7 @@ void *Sequencer(void *threadp)
 {
     printf("\n********************In sequencer********************\n");
     struct timeval current_time_val;
-    struct timespec delay_time = {0,33333333}; // delay for 33.33 msec, 30 Hz
+    struct timespec delay_time = {1,0}; // delay for 33.33 msec, 30 Hz
     struct timespec remaining_time;
     double current_time;
     double residual;
@@ -1162,10 +1096,9 @@ void *Sequencer(void *threadp)
             printf("\nIn SEM_POST for 2\n");
             sem_post(&semS2);
         }
-        
         seqCnt++;
         
-        syslog(LOG_INFO,"\nseqCnt = %d\n",seqCnt);
+        syslog(LOG_INFO,"seqCnt = %d",seqCnt);
         printf("\nseqCnt = %d\n",seqCnt);
         
         //gettimeofday(&current_time_val, (struct timezone *)0);
@@ -1177,7 +1110,7 @@ void *Sequencer(void *threadp)
     sem_post(&semS2); 
     
    abortS1=TRUE; 
-   // abortS2=TRUE;
+   abortS2=TRUE;
 
     pthread_exit((void *)0);
 }
@@ -1196,9 +1129,12 @@ int main(int argc, char **argv)
 	struct sched_param main_param;
     pid_t mainpid;
     cpu_set_t allcpuset;
+    
+    system("uname -a");
 
 	pthread_attr_t main_attr;
     dev_name = "/dev/video0";
+   
     HRES = atoi(argv[1]);
     VRES = atoi(argv[2]);
     printf("Resolution requested is:\nHorizontal = %d\nVertical = %d\n",HRES,VRES);
@@ -1206,68 +1142,17 @@ int main(int argc, char **argv)
     strncpy(vres_string,argv[2],sizeof(vres_string));
     sprintf(ppm_header,"P6\n#9999999999 sec 9999999999 msec \n%s %s\n255\n",hres_string,vres_string);
     sprintf(pgm_header,"P5\n#9999999999 sec 9999999999 msec \n%s %s\n255\n",hres_string,vres_string);
+    
+    syslog(LOG_INFO,"***********PROGRAM BEGINS************");
 
-	for (;;)
-    {
-        int idx;
-        int c;
+    int idx,c;
+    c = getopt_long(argc, argv, short_options, long_options, &idx);
 
-        c = getopt_long(argc, argv,
-                    short_options, long_options, &idx);
-
-        if (-1 == c)
-            break;
-
-        switch (c)
-        {
-            case 0: /* getopt_long() flag */
-                break;
-
-            case 'd':
-                dev_name = optarg;
-                break;
-
-            case 'h':
-                usage(stdout, argc, argv);
-                exit(EXIT_SUCCESS);
-
-            case 'm':
-                io = IO_METHOD_MMAP;
-                break;
-
-            case 'r':
-                io = IO_METHOD_READ;
-                break;
-
-            case 'u':
-                io = IO_METHOD_USERPTR;
-                break;
-
-            case 'o':
-                out_buf++;
-                break;
-
-            case 'f':
-                force_format++;
-                break;
-
-            case 'c':
-                errno = 0;
-                frame_count = strtol(optarg, NULL, 0);
-                if (errno)
-                        errno_exit(optarg);
-                break;
-
-            default:
-                usage(stderr, argc, argv);
-                exit(EXIT_FAILURE);
-        }
-    }
     
     if (sem_init (&semS1, 0, 0)) { printf ("Failed to initialize S1 semaphore\n"); exit (-1); }
     if (sem_init (&semS2, 0, 0)) { printf ("Failed to initialize S2 semaphore\n"); exit (-1); }
     
-     mainpid=getpid();
+    mainpid=getpid();
 
     rt_max_prio = sched_get_priority_max(SCHED_FIFO);
     rt_min_prio = sched_get_priority_min(SCHED_FIFO);
@@ -1307,6 +1192,7 @@ int main(int argc, char **argv)
     init_device();
     start_capturing();
     
+
     CPU_ZERO(&threadcpu);
     CPU_SET(3, &threadcpu);
     
@@ -1317,10 +1203,10 @@ int main(int argc, char **argv)
     if(rc < 0)
         perror("pthread_create for service 1");
     else
-        printf("pthread_create successful for service 1\n"); 
-    
+        printf("pthread_create successful for service 1\n");
+        
     printf("Start sequencer\n");
-    threadParams[0].sequencePeriods=900;  
+    threadParams[0].sequencePeriods=2000;  
         
     CPU_ZERO(&threadcpu);
     CPU_SET(3, &threadcpu);
@@ -1332,14 +1218,14 @@ int main(int argc, char **argv)
     if(rc < 0)
         perror("pthread_create for sequencer");
     else
-        printf("pthread_create successful for sequencer\n");
+        printf("pthread_create successful for sequencer\n"); 
     
         
     CPU_ZERO(&threadcpu);
     CPU_SET(3, &threadcpu);
     
     rc=pthread_attr_setaffinity_np(&rt_sched_attr[2], sizeof(cpu_set_t), &threadcpu);
-    rt_param[2].sched_priority=rt_max_prio-2;
+    rt_param[2].sched_priority=rt_max_prio-1;
     rc=pthread_create(&threads[2], &rt_sched_attr[2], Service_2, (void *)&(threadParams[2]));
     if(rc < 0)
         perror("pthread_create for service 2");
