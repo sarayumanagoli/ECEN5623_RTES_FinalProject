@@ -230,7 +230,8 @@ void *Service_2(void *threadp)
     while(S2Cnt<=frame_count)
     {
         sem_wait(&semS2);
-        
+        framecnt++;
+        printf("\nFramecnt is %d", framecnt);
         dump_ppm(bigbuffer, g_size, framecnt, &frame_time);
         
         S2Cnt++;
@@ -393,8 +394,6 @@ static void process_image(const void *p, int size)
 
     // record when process was called
     clock_gettime(CLOCK_REALTIME, &frame_time);    
-
-    framecnt++;
 
     // This just dumps the frame to a file now, but you could replace with whatever image
     // processing you wish.
