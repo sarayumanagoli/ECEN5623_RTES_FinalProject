@@ -196,6 +196,7 @@ void *Service_1(void *threadp)
         service1_totaltime += service1_time;
         printf("\nService 1 total time %lf ms\n",service1_totaltime);
         
+        if(S1Cnt!=0)
         if(service1_wcet < service1_time) service1_wcet = service1_time;
         printf("\nService 1 WCET = %lf ms",service1_wcet);
         service1_totalwcet += service1_wcet;

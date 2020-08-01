@@ -82,6 +82,7 @@ unsigned char bigbuffer[(640*480*3)];
 struct timespec start_time_val;
 double start_realtime;
 sem_t semS1,semS2;
+int g_size;
 
 //to calculate the time difference for jitters
 static struct timespec img = {0, 0};
@@ -105,7 +106,7 @@ struct buffer          *buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
-static int              frame_count = 30;
+static int              frame_count = 180;
 int size;
 
 int abortTest=FALSE;
@@ -120,8 +121,6 @@ int rt_max_prio, rt_min_prio, min;
 struct sched_param main_param;
 
 char ppm_header[50];
-char pgm_header[50];
-char pgm_dumpname[]="test00000000.pgm";
 char ppm_dumpname[]="test00000000.ppm";
 
 //resolutions
@@ -132,13 +131,16 @@ char hres_string[3];
 char vres_string[3];
 
 double exec_time, exec_time_max;
-
+double service1_averagetime, service2_averagetime,service1_averagewcet,service2_averagewcet;
+double sequence_averagetime,sequence_averagewcet;
 
 typedef double FLOAT;
 #define K 4.0
 
 double total_jitter=0;		
 double jitter=0;		
+
+unsigned char arr_img[60][640*480*3];
 
 FLOAT PSF[9] = {-K/8.0, -K/8.0, -K/8.0, -K/8.0, K+1.0, -K/8.0, -K/8.0, -K/8.0, -K/8.0};
 static struct v4l2_format fmt;
@@ -155,38 +157,77 @@ double realtime(struct timespec *tsptr)
     return ((double)(tsptr->tv_sec) + (((double)tsptr->tv_nsec)/1000000000.0));
 }
 
+double time_ms()
+{
+    struct timespec timing = {0,0};
+    clock_gettime(CLOCK_REALTIME, &timing);
+    return(((double)timing.tv_sec*(double)1000) + ((double)timing.tv_nsec/(double)1000000));
+}
+
 void *Service_1(void *threadp)
 {
     printf("\n*********************In service 1****************************\n");
     struct timespec current_time_val;
     double current_realtime;
     unsigned long long S1Cnt=0;
+    double service1_starttime;
+    double service1_endtime;
+    double service1_time;
+    double service1_jitter, service1_deadline;
+    double service1_wcet = 0;
+    double service1_totaltime = 0;
+    double service1_totalwcet = 0;
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
     syslog(LOG_CRIT, "S1 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
-    printf("S1 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
     while(!abortS1)
     {
+        printf("\nBefore S1 sem wait\n");
         sem_wait(&semS1);
+        printf("\n*********************In service 1 while****************************\n");
         
+        service1_starttime = time_ms();
+        //printf("\nService 1 started at %lf ms\n",service1_starttime);
         mainloop();
+        service1_endtime = time_ms();
+        //printf("\nService 1 ended at %lf ms\n",service1_endtime);
+        
+        service1_time = service1_endtime - service1_starttime;
+        printf("\nService 1 each loop execution time  %lf ms\n",service1_time);
+        service1_totaltime += service1_time;
+        //printf("\nService 1 total time %lf ms\n",service1_totaltime);
+        
+        if(S1Cnt != 0)
+        if(service1_wcet < service1_time) service1_wcet = service1_time;
+        //printf("\nService 1 WCET = %lf ms",service1_wcet);
+    
+        service1_totalwcet += service1_wcet;
+        //printf("\nService 1 Total WCET = %lf ms",service1_totalwcet);
         
         S1Cnt++;
-        syslog(LOG_INFO,"\nS1Cnt = %d\n",S1Cnt);
-        printf("\nS1Cnt = %d\n",S1Cnt);
+        syslog(LOG_INFO,"S1Cnt = %d",S1Cnt);
+        //printf("\nS1Cnt = %d\n",S1Cnt);
         clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
         syslog(LOG_CRIT, "S1 50 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S1Cnt, current_realtime-start_realtime);
-        printf("S1 50 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S1Cnt, current_realtime-start_realtime);
     }
-
+    
+    service1_averagetime = (service1_totaltime/frame_count);
+    printf("\nService 1 Average Execution Time %lf ms\n",service1_averagetime);
+    
+    service1_averagewcet = (service1_totalwcet/frame_count);
+    printf("\nService 1 Average WCET %lf ms\n",service1_averagewcet);
+    
+    service1_deadline = (service1_averagewcet/frame_count)*1; //1Hz
+    service1_jitter = service1_averagetime - service1_deadline;
+    printf("\nService 1 Jitter %lf ms\n",service1_jitter);
+    
     pthread_exit((void *)0);
 }
 
 //PPM image format
 static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec *time)
 {
-    printf("In dump_ppm\n");
     struct utsname hostname;
     char timestampbuffer[100] = "\0";
     int written, i, total, dumpfd;
@@ -220,57 +261,69 @@ void *Service_2(void *threadp)
     struct timespec current_time_val;
     double current_realtime;
     unsigned long long S2Cnt=0;
+    double service2_jitter, service2_deadline;
+    double service2_starttime = 0;
+    double service2_endtime = 0;
+    double service2_time;
+    double service2_wcet = 0;
+    double service2_totaltime = 0;
+    double service2_totalwcet = 0;
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
     syslog(LOG_CRIT, "S2 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
-    printf("S2 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
 
-    while(S2Cnt<=frame_count)
+    while(!abortS2)
     {
+        printf("\nBefore S2 sem wait\n");
         sem_wait(&semS2);
+        printf("\n*********************In service 2 while****************************\n");
         
-        dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time);
+        for(int i=0;i<(640*480*3);i++)
+        {
+            arr_img[S2Cnt % 60][i] = bigbuffer[i];
+        }
+    
+        //printf("\nFramecnt is %d", framecnt);
+        if(S2Cnt != 0) 
+        {
+            framecnt++;
+            service2_starttime = time_ms();
+            //printf("\nService 2 started at %lf ms\n",service2_starttime);
+            dump_ppm(arr_img + (S2Cnt % 60), g_size, framecnt, &frame_time);
+            service2_endtime = time_ms();
+            //printf("\nService 2 ended at %lf ms\n",service2_endtime);
+        }
+        
+        service2_time = service2_endtime - service2_starttime;
+        printf("\nService 2 each loop execution time  %lf ms\n",service2_time);
+        service2_totaltime += service2_time;
+        //printf("\nService 2 total time %lf ms\n",service2_totaltime);
+        
+        if(service2_wcet < service2_time) service2_wcet = service2_time;
+        //printf("\nService 2 WCET = %lf ms",service2_wcet);
+        service2_totalwcet += service2_wcet;
+        //printf("\nService 2 Total WCET = %lf ms",service2_totalwcet);
         
         S2Cnt++;
-        syslog(LOG_INFO,"\nS2Cnt = %d\n",S2Cnt);
-        printf("\nS2Cnt = %d\n",S2Cnt);
+        syslog(LOG_INFO,"S2Cnt = %d",S2Cnt);
+        //printf("\nS2Cnt = %d\n",S2Cnt);
         clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
         syslog(LOG_CRIT, "S2 20 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S2Cnt, current_realtime-start_realtime);
-        printf("S2 20 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S2Cnt, current_realtime-start_realtime);
     }
 
+    service2_averagetime = (service2_totaltime/frame_count);
+    printf("\nService 2 Average Execution Time %lf ms\n",service2_averagetime);
+    
+    service2_averagewcet = (service2_totalwcet/frame_count);
+    printf("\nService 2 Average WCET %lf ms\n",service2_averagewcet);
+    
+    service2_deadline = (service2_averagewcet/frame_count)*1; //1Hz
+    service2_jitter = service2_averagetime - service2_deadline;
+    printf("\nService 2 Jitter %lf ms\n",service2_jitter);
+    
     pthread_exit((void *)0);
 }
-
-
-
-
-//PGM image format
-static void dump_pgm(const void *p, int size, unsigned int tag, struct timespec *time)
-{
-    int written, i, total, dumpfd;
-   
-    snprintf(&pgm_dumpname[4], 9, "%08d", tag);
-    strncat(&pgm_dumpname[12], ".pgm", 5);
-    dumpfd = open(pgm_dumpname, O_WRONLY | O_NONBLOCK | O_CREAT, 00666);
-
-    snprintf(&pgm_header[4], 11, "%010d", (int)time->tv_sec);
-    strncat(&pgm_header[14], " sec ", 5);
-    snprintf(&pgm_header[19], 11, "%010d", (int)((time->tv_nsec)/1000000));
-    written=write(dumpfd, pgm_header, sizeof(pgm_header));
-
-    total=0;
-
-    do
-    {
-        written=write(dumpfd, p, size);
-        total+=written;
-    } while(total < size);
-    close(dumpfd);
-    
-}
-
 
 int delta_t(struct timespec *stop, struct timespec *start, struct timespec *delta_t)
 {
@@ -353,25 +406,6 @@ static int xioctl(int fh, int request, void *arg)
 
 
 
-void yuv2rgb_float(float y, float u, float v, 
-                   unsigned char *r, unsigned char *g, unsigned char *b)
-{
-    float r_temp, g_temp, b_temp;
-
-    // R = 1.164(Y-16) + 1.1596(V-128)
-    r_temp = 1.164*(y-16.0) + 1.1596*(v-128.0);  
-    *r = r_temp > 255.0 ? 255 : (r_temp < 0.0 ? 0 : (unsigned char)r_temp);
-
-    // G = 1.164(Y-16) - 0.813*(V-128) - 0.391*(U-128)
-    g_temp = 1.164*(y-16.0) - 0.813*(v-128.0) - 0.391*(u-128.0);
-    *g = g_temp > 255.0 ? 255 : (g_temp < 0.0 ? 0 : (unsigned char)g_temp);
-
-    // B = 1.164*(Y-16) + 2.018*(U-128)
-    b_temp = 1.164*(y-16.0) + 2.018*(u-128.0);
-    *b = b_temp > 255.0 ? 255 : (b_temp < 0.0 ? 0 : (unsigned char)b_temp);
-}
-
-
 // This is probably the most acceptable conversion from camera YUYV to RGB
 //
 // Wikipedia has a good discussion on the details of various conversions and cites good references:
@@ -413,17 +447,12 @@ void yuv2rgb(int y, int u, int v, unsigned char *r, unsigned char *g, unsigned c
    *b = b1 ;
 }
 
-
 static void process_image(const void *p, int size)
 {
-    printf("\nIn process image\n");
+    //printf("\nIn process image\n");
     int i, k, newsize=0;
     unsigned char *pptr = (unsigned char *)p;
 
-    // record when process was called
-    clock_gettime(CLOCK_REALTIME, &frame_time);    
-
-    framecnt++;
 
     // This just dumps the frame to a file now, but you could replace with whatever image
     // processing you wish.
@@ -435,8 +464,9 @@ static void process_image(const void *p, int size)
         yuv2rgb(y_temp, u_temp, v_temp, &bigbuffer[k], &bigbuffer[k+1], &bigbuffer[k+2]);
         yuv2rgb(y2_temp, u_temp, v_temp, &bigbuffer[k+3], &bigbuffer[k+4], &bigbuffer[k+5]);
     }
-    //dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time);
- 
+    
+    g_size = (size*6)/4;
+    
     fflush(stderr);
     fflush(stdout);
 }
@@ -444,106 +474,43 @@ static void process_image(const void *p, int size)
 //Each frame is read
 static int read_frame(void)
 {
-    printf("\nIn read frame\n");
+    //printf("\nIn read frame\n");
     struct v4l2_buffer buf;
     unsigned int i;
+   
 
-    switch (io)
+    CLEAR(buf);
+
+    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.memory = V4L2_MEMORY_MMAP;
+
+    if (-1 == xioctl(fd, VIDIOC_DQBUF, &buf))
     {
+        switch (errno)
+        {
+            case EAGAIN:
+                return 0;
 
-        case IO_METHOD_READ:
-            if (-1 == read(fd, buffers[0].start, buffers[0].length))
-            {
-                switch (errno)
-                {
-
-                    case EAGAIN:
-                        return 0;
-
-                    case EIO:
-                        /* Could ignore EIO, see spec. */
-
-                        /* fall through */
-
-                    default:
-                        errno_exit("read");
-                }
-            }
-
-            process_image(buffers[0].start, buffers[0].length);
-            break;
-
-        case IO_METHOD_MMAP:
-            CLEAR(buf);
-
-            buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-            buf.memory = V4L2_MEMORY_MMAP;
-
-            if (-1 == xioctl(fd, VIDIOC_DQBUF, &buf))
-            {
-                switch (errno)
-                {
-                    case EAGAIN:
-                        return 0;
-
-                    case EIO:
-                        /* Could ignore EIO, but drivers should only set for serious errors, although some set for
-                           non-fatal errors too.
-                         */
-                        return 0;
+            case EIO:
+                /* Could ignore EIO, but drivers should only set for serious errors, although some set for
+                   non-fatal errors too.
+                 */
+                return 0;
 
 
-                    default:
-                        printf("mmap failure\n");
-                        errno_exit("VIDIOC_DQBUF");
-                }
-            }
-
-            assert(buf.index < n_buffers);
-
-            process_image(buffers[buf.index].start, buf.bytesused);
-
-            if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
-                    errno_exit("VIDIOC_QBUF");
-            break;
-
-        case IO_METHOD_USERPTR:
-            CLEAR(buf);
-
-            buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-            buf.memory = V4L2_MEMORY_USERPTR;
-
-            if (-1 == xioctl(fd, VIDIOC_DQBUF, &buf))
-            {
-                switch (errno)
-                {
-                    case EAGAIN:
-                        return 0;
-
-                    case EIO:
-                        /* Could ignore EIO, see spec. */
-
-                        /* fall through */
-
-                    default:
-                        errno_exit("VIDIOC_DQBUF");
-                }
-            }
-
-            for (i = 0; i < n_buffers; ++i)
-                    if (buf.m.userptr == (unsigned long)buffers[i].start
-                        && buf.length == buffers[i].length)
-                            break;
-
-            assert(i < n_buffers);
-
-            process_image((void *)buf.m.userptr, buf.bytesused);
-
-            if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
-                    errno_exit("VIDIOC_QBUF");
-            break;
+            default:
+                printf("mmap failure\n");
+                errno_exit("VIDIOC_DQBUF");
+        }
     }
-    return 1;
+
+    assert(buf.index < n_buffers);
+
+    process_image(buffers[buf.index].start, buf.bytesused);
+
+    if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
+            errno_exit("VIDIOC_QBUF");
+
 }
 
 
@@ -563,79 +530,34 @@ static void mainloop(void)
 	rate = RATE;
 
     count = frame_count;
-    while (count > 0)
+    fd_set fds;
+    struct timeval tv;
+    int r;
+
+    FD_ZERO(&fds);
+    FD_SET(fd, &fds);
+
+    /* Timeout. */
+    tv.tv_sec = 2;
+    tv.tv_usec = 0;
+
+    r = select(fd + 1, &fds, NULL, NULL, &tv);
+
+    if (-1 == r)
     {
-        for (;;)
-        {
-            fd_set fds;
-            struct timeval tv;
-            int r;
-
-            FD_ZERO(&fds);
-            FD_SET(fd, &fds);
-
-            /* Timeout. */
-            tv.tv_sec = 10;
-            tv.tv_usec = 0;
-
-            r = select(fd + 1, &fds, NULL, NULL, &tv);
-
-            if (-1 == r)
-            {
-                if (EINTR == errno)
-                    continue;
-                errno_exit("select");
-            }
-
-            if (0 == r)
-            {
-                fprintf(stderr, "select timeout\n");
-                exit(EXIT_FAILURE);
-            }
-			clock_gettime(CLOCK_REALTIME,&img_start_time);
-            if (read_frame())
-            {
-                if(nanosleep(&read_delay, &time_error) != 0)
-                    perror("nanosleep");
-                    frame_number++;
-                count--;
-                break;
-            }
-
-            /* EAGAIN - continue select loop unless count done. */
-            if(count <= 0) break;
-        }
-		clock_gettime(CLOCK_REALTIME, &img_stop_time);
-        //time difference between each frame read is calculated
-		delta_t(&img_stop_time, &img_start_time, &img);
-		exec_time = ((double)img.tv_sec + (double)(((double)(img.tv_nsec))/((double)1000000000)));
-        if(flag == 0)
-		{
-            worst_exec += exec_time;
-            if(exec_time_max < exec_time)
-            {
-                exec_time_max = exec_time;            
-            }
-            deadline = (((double)worst_exec)/((double)frame_count))*rate;
-        }
-        else
-        {
-            //jitter is defined as the difference between the execution time and the dead like
-            jitter = exec_time - deadline;
-            if(jitter > 0)
-            {
-                printf("Jitter is positive for frame %d\n",frame_number);
-            }
-            total_jitter += jitter;
-        }
-        if(count <= 0) break;
+        errno_exit("select");
     }
-    if(flag == 1)
+
+    if (0 == r)
     {
-        printf("Time elapsed = %ld, nanoseconds = %ld\n", img.tv_sec, img.tv_nsec);
-        printf("Total Jitter = %lf\n",total_jitter);
-        printf("Deadline = %lf\n",deadline);
-        printf("Worst execution time = %lf\n",worst_exec);
+        fprintf(stderr, "select timeout\n");
+        exit(EXIT_FAILURE);
+    }
+    clock_gettime(CLOCK_REALTIME,&img_start_time);
+    if (read_frame())
+    {
+        if(nanosleep(&read_delay, &time_error) != 0)
+            perror("nanosleep");
     }
 }
 
@@ -1068,11 +990,21 @@ void *Sequencer(void *threadp)
     printf("\n********************In sequencer********************\n");
     struct timeval current_time_val;
     struct timespec delay_time = {1,0}; // delay for 33.33 msec, 30 Hz
+    //struct timespec delay_time = {0,100000000};
     struct timespec remaining_time;
     double current_time;
     double residual;
     int rc, delay_cnt=0;
     unsigned long long seqCnt=0;
+    
+    double sequence_jitter, sequence_deadline;
+    double sequence_starttime = 0;
+    double sequence_endtime = 0;
+    double sequence_time;
+    double sequence_wcet = 0;
+    double sequence_totaltime = 0;
+    double sequence_totalwcet = 0;
+    
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
     gettimeofday(&current_time_val, (struct timezone *)0);
@@ -1109,37 +1041,64 @@ void *Sequencer(void *threadp)
         gettimeofday(&current_time_val, (struct timezone *)0);
         syslog(LOG_CRIT, "Sequencer cycle %llu @ sec=%d, msec=%d\n", seqCnt, (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
 
+        sequence_starttime = time_ms();
+        //printf("\nSequence started at %lf ms\n",sequence_starttime);
+
         if(delay_cnt > 1) printf("Sequencer looping delay %d\n", delay_cnt);
 
         // Release each service at a sub-rate of the generic sequencer rate
-
-        // Servcie_1 = RT_MAX-1	@ 1 Hz
+        // Service_1 = RT_MAX-1	@ 1 Hz
         if((seqCnt % 1) == 0) 
         {
             printf("\nIn SEM_POST for 1\n");
             sem_post(&semS1);
         }
-        // Service_2 = RT_MAX-2	@ 1 Hz
+         // Service_2 = RT_MAX-2	@ 1 Hz
         if((seqCnt % 1) == 0)
         {
             printf("\nIn SEM_POST for 2\n");
             sem_post(&semS2);
         }
+        
         seqCnt++;
         
-        syslog(LOG_INFO,"\nseqCnt = %d\n",seqCnt);
-        printf("\nseqCnt = %d\n",seqCnt);
+        syslog(LOG_INFO,"seqCnt = %d",seqCnt);
+        //printf("\nseqCnt = %d\n",seqCnt);
+        
+        sequence_endtime = time_ms();
+        //printf("\nSequence ended at %lf ms\n",sequence_endtime);
+        
+        sequence_time = sequence_endtime - sequence_starttime;
+        printf("\nSequence each loop execution time  %lf ms\n",sequence_time);
+        sequence_totaltime += sequence_time;
+        //printf("\nSequence total time %lf ms\n",sequence_totaltime);
+        
+        if(sequence_wcet < sequence_time) sequence_wcet = sequence_time;
+        //printf("\nSequence WCET = %lf ms",sequence_wcet);
+    
+        sequence_totalwcet += sequence_wcet;
+        //printf("\nSequence Total WCET = %lf ms",sequence_totalwcet);
         
         //gettimeofday(&current_time_val, (struct timezone *)0);
         //syslog(LOG_CRIT, "Sequencer release all sub-services @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
 
-    } while(!abortTest && (seqCnt < frame_count));
+    } while(!abortTest && (seqCnt <= frame_count));
 
     sem_post(&semS1); 
     sem_post(&semS2); 
     
    abortS1=TRUE; 
-   // abortS2=TRUE;
+   abortS2=TRUE;
+   
+    sequence_averagetime = (sequence_totaltime/frame_count);
+    printf("\nSequence Average Execution Time %lf ms\n",sequence_averagetime);
+    
+    sequence_averagewcet = (sequence_totalwcet/frame_count);
+    printf("\nSequence Average WCET %lf ms\n",sequence_averagewcet);
+    
+    sequence_deadline = (sequence_averagewcet/frame_count)*1; //1Hz
+    sequence_jitter = sequence_averagetime - sequence_deadline;
+    printf("\nSequence Jitter %lf ms\n",sequence_jitter);
 
     pthread_exit((void *)0);
 }
@@ -1158,21 +1117,20 @@ int main(int argc, char **argv)
 	struct sched_param main_param;
     pid_t mainpid;
     cpu_set_t allcpuset;
+    
+    system("uname -a");
 
 	pthread_attr_t main_attr;
     dev_name = "/dev/video0";
-        
-    if(argc > 1)
-    {
-        HRES = atoi(argv[1]);
-        VRES = atoi(argv[2]);
-        printf("Resolution requested is:\nHorizontal = %d\nVertical = %d\n",HRES,VRES);
-        strncpy(hres_string,argv[1],sizeof(hres_string));
-        strncpy(vres_string,argv[2],sizeof(vres_string));
-        sprintf(ppm_header,"P6\n#9999999999 sec 9999999999 msec \n%s %s\n255\n",hres_string,vres_string);
-        sprintf(pgm_header,"P5\n#9999999999 sec 9999999999 msec \n%s %s\n255\n",hres_string,vres_string);
-        //frame_count = frame_count;
-    }
+   
+    HRES = atoi(argv[1]);
+    VRES = atoi(argv[2]);
+    printf("Resolution requested is:\nHorizontal = %d\nVertical = %d\n",HRES,VRES);
+    strncpy(hres_string,argv[1],sizeof(hres_string));
+    strncpy(vres_string,argv[2],sizeof(vres_string));
+    sprintf(ppm_header,"P6\n#9999999999 sec 9999999999 msec \n%s %s\n255\n",hres_string,vres_string);
+    
+    syslog(LOG_INFO,"***********PROGRAM BEGINS************");
 
     int idx,c;
     c = getopt_long(argc, argv, short_options, long_options, &idx);
@@ -1221,6 +1179,7 @@ int main(int argc, char **argv)
     init_device();
     start_capturing();
     
+
     CPU_ZERO(&threadcpu);
     CPU_SET(3, &threadcpu);
     
@@ -1231,10 +1190,10 @@ int main(int argc, char **argv)
     if(rc < 0)
         perror("pthread_create for service 1");
     else
-        printf("pthread_create successful for service 1\n"); 
-    
+        printf("pthread_create successful for service 1\n");
+        
     printf("Start sequencer\n");
-    threadParams[0].sequencePeriods=2000;  
+    threadParams[0].sequencePeriods=900;  
         
     CPU_ZERO(&threadcpu);
     CPU_SET(3, &threadcpu);
@@ -1246,14 +1205,14 @@ int main(int argc, char **argv)
     if(rc < 0)
         perror("pthread_create for sequencer");
     else
-        printf("pthread_create successful for sequencer\n");
+        printf("pthread_create successful for sequencer\n"); 
     
         
     CPU_ZERO(&threadcpu);
     CPU_SET(2, &threadcpu);
     
     rc=pthread_attr_setaffinity_np(&rt_sched_attr[2], sizeof(cpu_set_t), &threadcpu);
-    rt_param[2].sched_priority=rt_max_prio-1;
+    rt_param[2].sched_priority=rt_max_prio - 1;
     rc=pthread_create(&threads[2], &rt_sched_attr[2], Service_2, (void *)&(threadParams[2]));
     if(rc < 0)
         perror("pthread_create for service 2");
