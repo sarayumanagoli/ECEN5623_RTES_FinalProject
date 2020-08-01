@@ -106,7 +106,7 @@ struct buffer          *buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
-static int              frame_count = 60;
+static int              frame_count = 180;
 int size;
 
 int abortTest=FALSE;
@@ -131,7 +131,8 @@ char hres_string[3];
 char vres_string[3];
 
 double exec_time, exec_time_max;
-double service1_averagetime, service2_averagetime;
+double service1_averagetime, service2_averagetime,service1_averagewcet,service2_averagewcet;
+double service1_averagewcet, service2_averagewcet;
 
 typedef double FLOAT;
 #define K 4.0
@@ -154,11 +155,11 @@ double realtime(struct timespec *tsptr)
     return ((double)(tsptr->tv_sec) + (((double)tsptr->tv_nsec)/1000000000.0));
 }
 
-double time_second()
+double time_ms()
 {
     struct timespec timing = {0,0};
     clock_gettime(CLOCK_REALTIME, &timing);
-    return(timing.tv_sec + (timing.tv_nsec/1000000000));
+    return(((double)timing.tv_sec*(double)1000) + ((double)timing.tv_nsec/(double)1000000));
 }
 
 void *Service_1(void *threadp)
@@ -170,37 +171,46 @@ void *Service_1(void *threadp)
     double service1_starttime;
     double service1_endtime;
     double service1_time;
-    double service1_totaltime;
+    double service1_wcet = 0;
+    double service1_totaltime = 0;
+    double service1_totalwcet = 0;
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
     syslog(LOG_CRIT, "S1 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
-    printf("S1 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
     while(!abortS1)
     {
         sem_wait(&semS1);
         
-        service1_starttime = time_second();
-        printf("\nService 1 started at %lf seconds\n",service1_starttime);
+        service1_starttime = time_ms();
+        printf("\nService 1 started at %lf ms\n",service1_starttime);
         mainloop();
-        service1_endtime = time_second();
-        printf("\nService 1 ended at %lf seconds\n",service1_endtime);
+        service1_endtime = time_ms();
+        printf("\nService 1 ended at %lf ms\n",service1_endtime);
         
-        service1_time = service1_starttime - service1_endtime;
-        printf("\nService 1 each loop execution time  %lf seconds\n",service1_time);
+        service1_time = service1_endtime - service1_starttime;
+        printf("\nService 1 each loop execution time  %lf ms\n",service1_time);
         service1_totaltime += service1_time;
-        printf("\nService 1 total time %lf seconds\n",service1_totaltime);
+        printf("\nService 1 total time %lf ms\n",service1_totaltime);
+        
+        if(service1_wcet < service1_time) service1_wcet = service1_time;
+        printf("\nService 1 WCET = %lf ms",service1_wcet);
+        service1_totalwcet += service1_wcet;
+        printf("\nService 1 Total WCET = %lf ms",service1_totalwcet);
         
         S1Cnt++;
         syslog(LOG_INFO,"S1Cnt = %d",S1Cnt);
         printf("\nS1Cnt = %d\n",S1Cnt);
         clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
         syslog(LOG_CRIT, "S1 50 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S1Cnt, current_realtime-start_realtime);
-        printf("S1 50 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S1Cnt, current_realtime-start_realtime);
     }
     
     service1_averagetime = (service1_totaltime/frame_count);
-    printf("\nService 1 Average Execution Time %lf seconds\n",service1_averagetime);
+    printf("\nService 1 Average Execution Time %lf ms\n",service1_averagetime);
+    
+    service1_averagewcet = (service1_totalwcet/frame_count);
+    printf("\nService 1 Average WCET %lf ms\n",service1_averagewcet);
+    
     pthread_exit((void *)0);
 }
 
@@ -243,41 +253,49 @@ void *Service_2(void *threadp)
     double service2_starttime;
     double service2_endtime;
     double service2_time;
-    double service2_totaltime;
+    double service2_wcet = 0;
+    double service2_totaltime = 0;
+    double service2_totalwcet = 0;
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
     syslog(LOG_CRIT, "S2 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
-    printf("S2 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
 
     while(S2Cnt<=frame_count)
     {
         sem_wait(&semS2);
         framecnt++;
         printf("\nFramecnt is %d", framecnt);
-        service2_starttime = time_second();
-        printf("\nService 2 started at %lf seconds\n",service2_starttime);
-        if(framecnt != 1)
+        service2_starttime = time_ms();
+        printf("\nService 2 started at %lf ms\n",service2_starttime);
+        if(framecnt == 0) continue;
         dump_ppm(bigbuffer, g_size, framecnt, &frame_time);
-        service2_endtime = time_second();
-        printf("\nService 2 ended at %lf seconds\n",service2_endtime);
+        service2_endtime = time_ms();
+        printf("\nService 2 ended at %lf ms\n",service2_endtime);
         
-        service2_time = service2_starttime - service2_endtime;
-        printf("\nService 2 each loop execution time  %lf seconds\n",service2_time);
+        service2_time = service2_endtime - service2_starttime;
+        printf("\nService 2 each loop execution time  %lf ms\n",service2_time);
         service2_totaltime += service2_time;
-        printf("\nService 2 total time %lf seconds\n",service2_totaltime);
+        printf("\nService 2 total time %lf ms\n",service2_totaltime);
         
+        if(service2_wcet < service2_time) service2_wcet = service2_time;
+        printf("\nService 2 WCET = %lf ms",service2_wcet);
+        service2_totalwcet += service2_wcet;
+        printf("\nService 2 Total WCET = %lf ms",service2_totalwcet);
         
         S2Cnt++;
         syslog(LOG_INFO,"S2Cnt = %d",S2Cnt);
         printf("\nS2Cnt = %d\n",S2Cnt);
         clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
         syslog(LOG_CRIT, "S2 20 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S2Cnt, current_realtime-start_realtime);
-        printf("S2 20 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S2Cnt, current_realtime-start_realtime);
     }
 
     service2_averagetime = (service2_totaltime/frame_count);
-    printf("\nService 2 Average Execution Time %lf seconds\n",service2_averagetime);
+    printf("\nService 2 Average Execution Time %lf ms\n",service2_averagetime);
+    
+    service2_averagewcet = (service2_totalwcet/frame_count);
+    printf("\nService 2 Average WCET %lf ms\n",service2_averagewcet);
+    
     pthread_exit((void *)0);
 }
 
@@ -1118,7 +1136,7 @@ void *Sequencer(void *threadp)
         //gettimeofday(&current_time_val, (struct timezone *)0);
         //syslog(LOG_CRIT, "Sequencer release all sub-services @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
 
-    } while(!abortTest && (seqCnt < frame_count));
+    } while(!abortTest && (seqCnt < frame_count+4));
 
     sem_post(&semS1); 
     sem_post(&semS2); 
@@ -1238,7 +1256,7 @@ int main(int argc, char **argv)
     CPU_SET(3, &threadcpu);
     
     rc=pthread_attr_setaffinity_np(&rt_sched_attr[2], sizeof(cpu_set_t), &threadcpu);
-    rt_param[2].sched_priority=rt_max_prio-1;
+    rt_param[2].sched_priority=rt_max_prio - 2;
     rc=pthread_create(&threads[2], &rt_sched_attr[2], Service_2, (void *)&(threadParams[2]));
     if(rc < 0)
         perror("pthread_create for service 2");
