@@ -106,7 +106,7 @@ struct buffer          *buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
-static int              frame_count = 180;
+static int              frame_count = 60;
 int size;
 
 int abortTest=FALSE;
@@ -121,8 +121,6 @@ int rt_max_prio, rt_min_prio, min;
 struct sched_param main_param;
 
 char ppm_header[50];
-char pgm_header[50];
-char pgm_dumpname[]="test00000000.pgm";
 char ppm_dumpname[]="test00000000.ppm";
 
 //resolutions
@@ -133,7 +131,7 @@ char hres_string[3];
 char vres_string[3];
 
 double exec_time, exec_time_max;
-
+double service1_averagetime, service2_averagetime;
 
 typedef double FLOAT;
 #define K 4.0
@@ -156,12 +154,23 @@ double realtime(struct timespec *tsptr)
     return ((double)(tsptr->tv_sec) + (((double)tsptr->tv_nsec)/1000000000.0));
 }
 
+double time_second()
+{
+    struct timespec timing = {0,0};
+    clock_gettime(CLOCK_REALTIME, &timing);
+    return(timing.tv_sec + (timing.tv_nsec/1000000000));
+}
+
 void *Service_1(void *threadp)
 {
     printf("\n*********************In service 1****************************\n");
     struct timespec current_time_val;
     double current_realtime;
     unsigned long long S1Cnt=0;
+    double service1_starttime;
+    double service1_endtime;
+    double service1_time;
+    double service1_totaltime;
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
@@ -171,7 +180,16 @@ void *Service_1(void *threadp)
     {
         sem_wait(&semS1);
         
+        service1_starttime = time_second();
+        printf("\nService 1 started at %lf seconds\n",service1_starttime);
         mainloop();
+        service1_endtime = time_second();
+        printf("\nService 1 ended at %lf seconds\n",service1_endtime);
+        
+        service1_time = service1_starttime - service1_endtime;
+        printf("\nService 1 each loop execution time  %lf seconds\n",service1_time);
+        service1_totaltime += service1_time;
+        printf("\nService 1 total time %lf seconds\n",service1_totaltime);
         
         S1Cnt++;
         syslog(LOG_INFO,"S1Cnt = %d",S1Cnt);
@@ -180,14 +198,15 @@ void *Service_1(void *threadp)
         syslog(LOG_CRIT, "S1 50 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S1Cnt, current_realtime-start_realtime);
         printf("S1 50 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S1Cnt, current_realtime-start_realtime);
     }
-
+    
+    service1_averagetime = (service1_totaltime/frame_count);
+    printf("\nService 1 Average Execution Time %lf seconds\n",service1_averagetime);
     pthread_exit((void *)0);
 }
 
 //PPM image format
 static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec *time)
 {
-    printf("In dump_ppm\n");
     struct utsname hostname;
     char timestampbuffer[100] = "\0";
     int written, i, total, dumpfd;
@@ -221,6 +240,10 @@ void *Service_2(void *threadp)
     struct timespec current_time_val;
     double current_realtime;
     unsigned long long S2Cnt=0;
+    double service2_starttime;
+    double service2_endtime;
+    double service2_time;
+    double service2_totaltime;
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
@@ -232,7 +255,18 @@ void *Service_2(void *threadp)
         sem_wait(&semS2);
         framecnt++;
         printf("\nFramecnt is %d", framecnt);
+        service2_starttime = time_second();
+        printf("\nService 2 started at %lf seconds\n",service2_starttime);
+        if(framecnt != 1)
         dump_ppm(bigbuffer, g_size, framecnt, &frame_time);
+        service2_endtime = time_second();
+        printf("\nService 2 ended at %lf seconds\n",service2_endtime);
+        
+        service2_time = service2_starttime - service2_endtime;
+        printf("\nService 2 each loop execution time  %lf seconds\n",service2_time);
+        service2_totaltime += service2_time;
+        printf("\nService 2 total time %lf seconds\n",service2_totaltime);
+        
         
         S2Cnt++;
         syslog(LOG_INFO,"S2Cnt = %d",S2Cnt);
@@ -242,6 +276,8 @@ void *Service_2(void *threadp)
         printf("S2 20 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S2Cnt, current_realtime-start_realtime);
     }
 
+    service2_averagetime = (service2_totaltime/frame_count);
+    printf("\nService 2 Average Execution Time %lf seconds\n",service2_averagetime);
     pthread_exit((void *)0);
 }
 
@@ -326,25 +362,6 @@ static int xioctl(int fh, int request, void *arg)
 
 
 
-void yuv2rgb_float(float y, float u, float v, 
-                   unsigned char *r, unsigned char *g, unsigned char *b)
-{
-    float r_temp, g_temp, b_temp;
-
-    // R = 1.164(Y-16) + 1.1596(V-128)
-    r_temp = 1.164*(y-16.0) + 1.1596*(v-128.0);  
-    *r = r_temp > 255.0 ? 255 : (r_temp < 0.0 ? 0 : (unsigned char)r_temp);
-
-    // G = 1.164(Y-16) - 0.813*(V-128) - 0.391*(U-128)
-    g_temp = 1.164*(y-16.0) - 0.813*(v-128.0) - 0.391*(u-128.0);
-    *g = g_temp > 255.0 ? 255 : (g_temp < 0.0 ? 0 : (unsigned char)g_temp);
-
-    // B = 1.164*(Y-16) + 2.018*(U-128)
-    b_temp = 1.164*(y-16.0) + 2.018*(u-128.0);
-    *b = b_temp > 255.0 ? 255 : (b_temp < 0.0 ? 0 : (unsigned char)b_temp);
-}
-
-
 // This is probably the most acceptable conversion from camera YUYV to RGB
 //
 // Wikipedia has a good discussion on the details of various conversions and cites good references:
@@ -388,7 +405,6 @@ void yuv2rgb(int y, int u, int v, unsigned char *r, unsigned char *g, unsigned c
 
 static void process_image(const void *p, int size)
 {
-    printf("\nIn process image\n");
     int i, k, newsize=0;
     unsigned char *pptr = (unsigned char *)p;
 
@@ -414,7 +430,6 @@ static void process_image(const void *p, int size)
 //Each frame is read
 static int read_frame(void)
 {
-    printf("\nIn read frame\n");
     struct v4l2_buffer buf;
     unsigned int i;
 
@@ -1140,7 +1155,6 @@ int main(int argc, char **argv)
     strncpy(hres_string,argv[1],sizeof(hres_string));
     strncpy(vres_string,argv[2],sizeof(vres_string));
     sprintf(ppm_header,"P6\n#9999999999 sec 9999999999 msec \n%s %s\n255\n",hres_string,vres_string);
-    sprintf(pgm_header,"P5\n#9999999999 sec 9999999999 msec \n%s %s\n255\n",hres_string,vres_string);
     
     syslog(LOG_INFO,"***********PROGRAM BEGINS************");
 
@@ -1205,7 +1219,7 @@ int main(int argc, char **argv)
         printf("pthread_create successful for service 1\n");
         
     printf("Start sequencer\n");
-    threadParams[0].sequencePeriods=2000;  
+    threadParams[0].sequencePeriods=900;  
         
     CPU_ZERO(&threadcpu);
     CPU_SET(3, &threadcpu);
