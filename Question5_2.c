@@ -426,8 +426,6 @@ static void process_image(const void *p, int size)
     int i, k, newsize=0;
     unsigned char *pptr = (unsigned char *)p;
 
-    // record when process was called
-    clock_gettime(CLOCK_REALTIME, &frame_time);    
 
     // This just dumps the frame to a file now, but you could replace with whatever image
     // processing you wish.
@@ -566,79 +564,34 @@ static void mainloop(void)
 	rate = RATE;
 
     count = frame_count;
-    while (count > 0)
+    fd_set fds;
+    struct timeval tv;
+    int r;
+
+    FD_ZERO(&fds);
+    FD_SET(fd, &fds);
+
+    /* Timeout. */
+    tv.tv_sec = 2;
+    tv.tv_usec = 0;
+
+    r = select(fd + 1, &fds, NULL, NULL, &tv);
+
+    if (-1 == r)
     {
-        for (;;)
-        {
-            fd_set fds;
-            struct timeval tv;
-            int r;
-
-            FD_ZERO(&fds);
-            FD_SET(fd, &fds);
-
-            /* Timeout. */
-            tv.tv_sec = 2;
-            tv.tv_usec = 0;
-
-            r = select(fd + 1, &fds, NULL, NULL, &tv);
-
-            if (-1 == r)
-            {
-                if (EINTR == errno)
-                    continue;
-                errno_exit("select");
-            }
-
-            if (0 == r)
-            {
-                fprintf(stderr, "select timeout\n");
-                exit(EXIT_FAILURE);
-            }
-			clock_gettime(CLOCK_REALTIME,&img_start_time);
-            if (read_frame())
-            {
-                if(nanosleep(&read_delay, &time_error) != 0)
-                    perror("nanosleep");
-                    frame_number++;
-                count--;
-                break;
-            }
-
-            /* EAGAIN - continue select loop unless count done. */
-            if(count <= 0) break;
-        }
-		clock_gettime(CLOCK_REALTIME, &img_stop_time);
-        //time difference between each frame read is calculated
-		delta_t(&img_stop_time, &img_start_time, &img);
-		exec_time = ((double)img.tv_sec + (double)(((double)(img.tv_nsec))/((double)1000000000)));
-        if(flag == 0)
-		{
-            worst_exec += exec_time;
-            if(exec_time_max < exec_time)
-            {
-                exec_time_max = exec_time;            
-            }
-            deadline = (((double)worst_exec)/((double)frame_count))*rate;
-        }
-        else
-        {
-            //jitter is defined as the difference between the execution time and the dead like
-            jitter = exec_time - deadline;
-            if(jitter > 0)
-            {
-                printf("Jitter is positive for frame %d\n",frame_number);
-            }
-            total_jitter += jitter;
-        }
-        if(count <= 0) break;
+        errno_exit("select");
     }
-    if(flag == 1)
+
+    if (0 == r)
     {
-        printf("Time elapsed = %ld, nanoseconds = %ld\n", img.tv_sec, img.tv_nsec);
-        printf("Total Jitter = %lf\n",total_jitter);
-        printf("Deadline = %lf\n",deadline);
-        printf("Worst execution time = %lf\n",worst_exec);
+        fprintf(stderr, "select timeout\n");
+        exit(EXIT_FAILURE);
+    }
+    clock_gettime(CLOCK_REALTIME,&img_start_time);
+    if (read_frame())
+    {
+        if(nanosleep(&read_delay, &time_error) != 0)
+            perror("nanosleep");
     }
 }
 
