@@ -106,7 +106,7 @@ struct buffer          *buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
-static int              frame_count = 180;
+static int              frame_count = 60;
 int size;
 
 int abortTest=FALSE;
@@ -171,6 +171,7 @@ void *Service_1(void *threadp)
     double service1_starttime;
     double service1_endtime;
     double service1_time;
+    double service1_jitter, service1_deadline;
     double service1_wcet = 0;
     double service1_totaltime = 0;
     double service1_totalwcet = 0;
@@ -211,6 +212,10 @@ void *Service_1(void *threadp)
     service1_averagewcet = (service1_totalwcet/frame_count);
     printf("\nService 1 Average WCET %lf ms\n",service1_averagewcet);
     
+    service1_deadline = (service1_averagewcet/frame_count)*1; //1Hz
+    service1_jitter = service1_averagetime - service1_deadline;
+    printf("\nService 1 Jitter %lf ms\n",service1_jitter);
+    
     pthread_exit((void *)0);
 }
 
@@ -250,6 +255,7 @@ void *Service_2(void *threadp)
     struct timespec current_time_val;
     double current_realtime;
     unsigned long long S2Cnt=0;
+    double service2_jitter, service2_deadline;
     double service2_starttime;
     double service2_endtime;
     double service2_time;
@@ -261,7 +267,7 @@ void *Service_2(void *threadp)
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
     syslog(LOG_CRIT, "S2 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
 
-    while(S2Cnt<=frame_count)
+    while(!abortS2)
     {
         sem_wait(&semS2);
         framecnt++;
@@ -295,6 +301,10 @@ void *Service_2(void *threadp)
     
     service2_averagewcet = (service2_totalwcet/frame_count);
     printf("\nService 2 Average WCET %lf ms\n",service2_averagewcet);
+    
+    service2_deadline = (service2_averagewcet/frame_count)*1; //1Hz
+    service2_jitter = service2_averagetime - service2_deadline;
+    printf("\nService 2 Jitter %lf ms\n",service2_jitter);
     
     pthread_exit((void *)0);
 }
@@ -448,103 +458,40 @@ static int read_frame(void)
 {
     struct v4l2_buffer buf;
     unsigned int i;
+   
 
-    switch (io)
+    CLEAR(buf);
+
+    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.memory = V4L2_MEMORY_MMAP;
+
+    if (-1 == xioctl(fd, VIDIOC_DQBUF, &buf))
     {
+        switch (errno)
+        {
+            case EAGAIN:
+                return 0;
 
-        case IO_METHOD_READ:
-            if (-1 == read(fd, buffers[0].start, buffers[0].length))
-            {
-                switch (errno)
-                {
-
-                    case EAGAIN:
-                        return 0;
-
-                    case EIO:
-                        /* Could ignore EIO, see spec. */
-
-                        /* fall through */
-
-                    default:
-                        errno_exit("read");
-                }
-            }
-
-            process_image(buffers[0].start, buffers[0].length);
-            break;
-
-        case IO_METHOD_MMAP:
-            CLEAR(buf);
-
-            buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-            buf.memory = V4L2_MEMORY_MMAP;
-
-            if (-1 == xioctl(fd, VIDIOC_DQBUF, &buf))
-            {
-                switch (errno)
-                {
-                    case EAGAIN:
-                        return 0;
-
-                    case EIO:
-                        /* Could ignore EIO, but drivers should only set for serious errors, although some set for
-                           non-fatal errors too.
-                         */
-                        return 0;
+            case EIO:
+                /* Could ignore EIO, but drivers should only set for serious errors, although some set for
+                   non-fatal errors too.
+                 */
+                return 0;
 
 
-                    default:
-                        printf("mmap failure\n");
-                        errno_exit("VIDIOC_DQBUF");
-                }
-            }
-
-            assert(buf.index < n_buffers);
-
-            process_image(buffers[buf.index].start, buf.bytesused);
-
-            if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
-                    errno_exit("VIDIOC_QBUF");
-            break;
-
-        case IO_METHOD_USERPTR:
-            CLEAR(buf);
-
-            buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-            buf.memory = V4L2_MEMORY_USERPTR;
-
-            if (-1 == xioctl(fd, VIDIOC_DQBUF, &buf))
-            {
-                switch (errno)
-                {
-                    case EAGAIN:
-                        return 0;
-
-                    case EIO:
-                        /* Could ignore EIO, see spec. */
-
-                        /* fall through */
-
-                    default:
-                        errno_exit("VIDIOC_DQBUF");
-                }
-            }
-
-            for (i = 0; i < n_buffers; ++i)
-                    if (buf.m.userptr == (unsigned long)buffers[i].start
-                        && buf.length == buffers[i].length)
-                            break;
-
-            assert(i < n_buffers);
-
-            process_image((void *)buf.m.userptr, buf.bytesused);
-
-            if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
-                    errno_exit("VIDIOC_QBUF");
-            break;
+            default:
+                printf("mmap failure\n");
+                errno_exit("VIDIOC_DQBUF");
+        }
     }
-    return 1;
+
+    assert(buf.index < n_buffers);
+
+    process_image(buffers[buf.index].start, buf.bytesused);
+
+    if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
+            errno_exit("VIDIOC_QBUF");
+
 }
 
 
@@ -1069,18 +1016,20 @@ void *Sequencer(void *threadp)
 
         // Release each service at a sub-rate of the generic sequencer rate
 
-        // Servcie_1 = RT_MAX-1	@ 1 Hz
-        if((seqCnt % 1) == 0) 
-        {
-            printf("\nIn SEM_POST for 1\n");
-            sem_post(&semS1);
-        }
+
         // Service_2 = RT_MAX-2	@ 1 Hz
         if((seqCnt % 1) == 0)
         {
             printf("\nIn SEM_POST for 2\n");
             sem_post(&semS2);
         }
+        // Servcie_1 = RT_MAX-1	@ 1 Hz
+        if((seqCnt % 1) == 0) 
+        {
+            printf("\nIn SEM_POST for 1\n");
+            sem_post(&semS1);
+        }
+        
         seqCnt++;
         
         syslog(LOG_INFO,"seqCnt = %d",seqCnt);
@@ -1089,7 +1038,7 @@ void *Sequencer(void *threadp)
         //gettimeofday(&current_time_val, (struct timezone *)0);
         //syslog(LOG_CRIT, "Sequencer release all sub-services @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
 
-    } while(!abortTest && (seqCnt < frame_count+4));
+    } while(!abortTest && (seqCnt < frame_count+2));
 
     sem_post(&semS1); 
     sem_post(&semS2); 
@@ -1206,10 +1155,10 @@ int main(int argc, char **argv)
     
         
     CPU_ZERO(&threadcpu);
-    CPU_SET(3, &threadcpu);
+    CPU_SET(2, &threadcpu);
     
     rc=pthread_attr_setaffinity_np(&rt_sched_attr[2], sizeof(cpu_set_t), &threadcpu);
-    rt_param[2].sched_priority=rt_max_prio - 2;
+    rt_param[2].sched_priority=rt_max_prio - 1;
     rc=pthread_create(&threads[2], &rt_sched_attr[2], Service_2, (void *)&(threadParams[2]));
     if(rc < 0)
         perror("pthread_create for service 2");
