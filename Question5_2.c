@@ -272,7 +272,7 @@ void *Service_2(void *threadp)
     while(!abortS2)
     {
         sem_wait(&semS2);
-        framecnt++;
+        
         
         for(int i=0;i<(640*480*3);i++)
         {
@@ -282,8 +282,11 @@ void *Service_2(void *threadp)
         printf("\nFramecnt is %d", framecnt);
         service2_starttime = time_ms();
         printf("\nService 2 started at %lf ms\n",service2_starttime);
-        if(framecnt == 0) continue;
-        dump_ppm(bigbuffer, g_size, framecnt, &frame_time);
+        if(S2Cnt != 0) 
+        {
+            framecnt++;
+            dump_ppm(bigbuffer, g_size, framecnt, &frame_time);
+        }
         service2_endtime = time_ms();
         printf("\nService 2 ended at %lf ms\n",service2_endtime);
         
