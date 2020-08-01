@@ -106,7 +106,7 @@ struct buffer          *buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
-static int              frame_count = 60;
+static int              frame_count = 180;
 int size;
 
 int abortTest=FALSE;
@@ -139,6 +139,8 @@ typedef double FLOAT;
 
 double total_jitter=0;		
 double jitter=0;		
+
+unsigned char arr_img[60][640*480*3];
 
 FLOAT PSF[9] = {-K/8.0, -K/8.0, -K/8.0, -K/8.0, K+1.0, -K/8.0, -K/8.0, -K/8.0, -K/8.0};
 static struct v4l2_format fmt;
@@ -271,6 +273,12 @@ void *Service_2(void *threadp)
     {
         sem_wait(&semS2);
         framecnt++;
+        
+        for(int i=0;i<(640*480*3);i++)
+        {
+            arr_img[S2Cnt % 60][i] = bigbuffer[i];
+        }
+    
         printf("\nFramecnt is %d", framecnt);
         service2_starttime = time_ms();
         printf("\nService 2 started at %lf ms\n",service2_starttime);
@@ -447,8 +455,9 @@ static void process_image(const void *p, int size)
         yuv2rgb(y_temp, u_temp, v_temp, &bigbuffer[k], &bigbuffer[k+1], &bigbuffer[k+2]);
         yuv2rgb(y2_temp, u_temp, v_temp, &bigbuffer[k+3], &bigbuffer[k+4], &bigbuffer[k+5]);
     }
-    //dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time);
+    
     g_size = (size*6)/4;
+    
     fflush(stderr);
     fflush(stdout);
 }
@@ -971,6 +980,7 @@ void *Sequencer(void *threadp)
     printf("\n********************In sequencer********************\n");
     struct timeval current_time_val;
     struct timespec delay_time = {1,0}; // delay for 33.33 msec, 30 Hz
+    //struct timespec delay_time = {0,100000000};
     struct timespec remaining_time;
     double current_time;
     double residual;
