@@ -1048,7 +1048,7 @@ void *Sequencer(void *threadp)
         //gettimeofday(&current_time_val, (struct timezone *)0);
         //syslog(LOG_CRIT, "Sequencer release all sub-services @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
 
-    } while(!abortTest && (seqCnt < frame_count+2));
+    } while(!abortTest && (seqCnt <= frame_count));
 
     sem_post(&semS1); 
     sem_post(&semS2); 
