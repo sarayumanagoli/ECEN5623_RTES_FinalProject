@@ -132,7 +132,7 @@ char vres_string[3];
 
 double exec_time, exec_time_max;
 double service1_averagetime, service2_averagetime,service1_averagewcet,service2_averagewcet;
-double service1_averagewcet, service2_averagewcet;
+double sequence_averagetime,sequence_averagewcet;
 
 typedef double FLOAT;
 #define K 4.0
@@ -992,6 +992,14 @@ void *Sequencer(void *threadp)
     unsigned long long seqCnt=0;
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
+    double sequence_jitter, sequence_deadline;
+    double sequence_starttime = 0;
+    double sequence_endtime = 0;
+    double sequence_time;
+    double sequence_wcet = 0;
+    double sequence_totaltime = 0;
+    double sequence_totalwcet = 0;
+
     gettimeofday(&current_time_val, (struct timezone *)0);
     syslog(LOG_CRIT, "Sequencer thread @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
     printf("Sequencer thread @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
@@ -1026,6 +1034,9 @@ void *Sequencer(void *threadp)
         gettimeofday(&current_time_val, (struct timezone *)0);
         syslog(LOG_CRIT, "Sequencer cycle %llu @ sec=%d, msec=%d\n", seqCnt, (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
 
+        sequence_starttime = time_ms();
+        //printf("\nSequence started at %lf ms\n",sequence_starttime);
+
         if(delay_cnt > 1) printf("Sequencer looping delay %d\n", delay_cnt);
 
         // Release each service at a sub-rate of the generic sequencer rate
@@ -1049,6 +1060,20 @@ void *Sequencer(void *threadp)
         syslog(LOG_INFO,"seqCnt = %d",seqCnt);
         printf("\nseqCnt = %d\n",seqCnt);
         
+        sequence_endtime = time_ms();
+        //printf("\nSequence ended at %lf ms\n",sequence_endtime);
+        
+        sequence_time = sequence_endtime - sequence_starttime;
+        printf("\nSequence each loop execution time  %lf ms\n",sequence_time);
+        sequence_totaltime += sequence_time;
+        //printf("\nSequence total time %lf ms\n",sequence_totaltime);
+        
+        if(sequence_wcet < sequence_time) sequence_wcet = sequence_time;
+        //printf("\nSequence WCET = %lf ms",sequence_wcet);
+    
+        sequence_totalwcet += sequence_wcet;
+        //printf("\nSequence Total WCET = %lf ms",sequence_totalwcet);
+        
         //gettimeofday(&current_time_val, (struct timezone *)0);
         //syslog(LOG_CRIT, "Sequencer release all sub-services @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
 
@@ -1059,6 +1084,16 @@ void *Sequencer(void *threadp)
     
    abortS1=TRUE; 
    abortS2=TRUE;
+   
+   sequence_averagetime = (sequence_totaltime/frame_count);
+    printf("\nSequence Average Execution Time %lf ms\n",sequence_averagetime);
+    
+    sequence_averagewcet = (sequence_totalwcet/frame_count);
+    printf("\nSequence Average WCET %lf ms\n",sequence_averagewcet);
+    
+    sequence_deadline = (sequence_averagewcet/frame_count)*1; //1Hz
+    sequence_jitter = sequence_averagetime - sequence_deadline;
+    printf("\nSequence Jitter %lf ms\n",sequence_jitter);
 
     pthread_exit((void *)0);
 }
