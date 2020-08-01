@@ -64,7 +64,7 @@
 #define TRUE (1)
 #define FALSE (0)
 #define SHARPEN
-
+#define K 4.0
 
 //definition of threads
 typedef struct
@@ -72,6 +72,22 @@ typedef struct
 	int threadIdx;
 	unsigned long long sequencePeriods;
 } threadParams_t;
+
+typedef double FLOAT;
+
+enum io_method 
+{
+        IO_METHOD_READ,
+        IO_METHOD_MMAP,
+        IO_METHOD_USERPTR,
+};
+
+struct buffer 
+{
+        void   *start;
+        size_t  length;
+};
+
 
 //declarations
 unsigned int framecnt=0;
@@ -83,19 +99,6 @@ struct timespec start_time_val;
 double start_realtime;
 sem_t semS1,semS2;
 int g_size;
-
-//to calculate the time difference for jitters
-static struct timespec img = {0, 0};
-static struct timespec img_start_time = {0, 0};
-static struct timespec img_stop_time = {0, 0};
-
-enum io_method 
-{
-        IO_METHOD_READ,
-        IO_METHOD_MMAP,
-        IO_METHOD_USERPTR,
-};
-
 
 static char            *dev_name;
 //static enum io_method   io = IO_METHOD_USERPTR;
@@ -111,8 +114,6 @@ int size;
 
 int abortTest=FALSE;
 int abortS1=FALSE, abortS2=FALSE, abortS3=FALSE;
-
-static void mainloop(void);
 
 int missed;
 pthread_t main_thread;
@@ -133,24 +134,12 @@ char vres_string[3];
 double exec_time, exec_time_max;
 double service1_averagetime, service2_averagetime,service1_averagewcet,service2_averagewcet;
 double sequence_averagetime,sequence_averagewcet;
-
-typedef double FLOAT;
-#define K 4.0
-
-double total_jitter=0;		
-double jitter=0;		
-
 unsigned char arr_img[60][640*480*3];
 
 FLOAT PSF[9] = {-K/8.0, -K/8.0, -K/8.0, -K/8.0, K+1.0, -K/8.0, -K/8.0, -K/8.0, -K/8.0};
 static struct v4l2_format fmt;
 
-
-struct buffer 
-{
-        void   *start;
-        size_t  length;
-};
+static void mainloop(void);
 
 double realtime(struct timespec *tsptr)
 {
@@ -162,6 +151,36 @@ double time_ms()
     struct timespec timing = {0,0};
     clock_gettime(CLOCK_REALTIME, &timing);
     return(((double)timing.tv_sec*(double)1000) + ((double)timing.tv_nsec/(double)1000000));
+}
+
+//PPM image format
+static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec *time)
+{
+    struct utsname hostname;
+    char timestampbuffer[100] = "\0";
+    int written, i, total, dumpfd;
+    uname(&hostname);
+   
+    snprintf(&ppm_dumpname[4], 9, "%08d", tag);
+    strncat(&ppm_dumpname[12], ".ppm", 5);
+    dumpfd = open(ppm_dumpname, O_WRONLY | O_NONBLOCK | O_CREAT, 00666);
+ 
+    snprintf(&ppm_header[4], 11, "%010d", (int)time->tv_sec);
+    strncat(&ppm_header[14], " sec ", 5);
+    snprintf(&ppm_header[19], 11, "%010d", (int)((time->tv_nsec)/1000000));
+    written=write(dumpfd, ppm_header, sizeof(ppm_header));
+
+    total=0;
+
+    do
+    {
+        written=write(dumpfd, p, size);
+        total+=written;
+    } while(total < size);
+    snprintf(timestampbuffer, sizeof(timestampbuffer), "./datetime.sh %s %s %s %s", hostname.machine, hostname.sysname, hostname.nodename, ppm_dumpname);
+    system(timestampbuffer);
+    close(dumpfd);
+    
 }
 
 void *Service_1(void *threadp)
@@ -220,36 +239,6 @@ void *Service_1(void *threadp)
     printf("\nService 1 Jitter %lf ms\n",service1_jitter);
     
     pthread_exit((void *)0);
-}
-
-//PPM image format
-static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec *time)
-{
-    struct utsname hostname;
-    char timestampbuffer[100] = "\0";
-    int written, i, total, dumpfd;
-    uname(&hostname);
-   
-    snprintf(&ppm_dumpname[4], 9, "%08d", tag);
-    strncat(&ppm_dumpname[12], ".ppm", 5);
-    dumpfd = open(ppm_dumpname, O_WRONLY | O_NONBLOCK | O_CREAT, 00666);
- 
-    snprintf(&ppm_header[4], 11, "%010d", (int)time->tv_sec);
-    strncat(&ppm_header[14], " sec ", 5);
-    snprintf(&ppm_header[19], 11, "%010d", (int)((time->tv_nsec)/1000000));
-    written=write(dumpfd, ppm_header, sizeof(ppm_header));
-
-    total=0;
-
-    do
-    {
-        written=write(dumpfd, p, size);
-        total+=written;
-    } while(total < size);
-    snprintf(timestampbuffer, sizeof(timestampbuffer), "./datetime.sh %s %s %s %s", hostname.machine, hostname.sysname, hostname.nodename, ppm_dumpname);
-    system(timestampbuffer);
-    close(dumpfd);
-    
 }
 
 void *Service_2(void *threadp)
@@ -321,44 +310,125 @@ void *Service_2(void *threadp)
     pthread_exit((void *)0);
 }
 
-int delta_t(struct timespec *stop, struct timespec *start, struct timespec *delta_t)
+void *Sequencer(void *threadp)
 {
-  int dt_sec=stop->tv_sec - start->tv_sec;
-  int dt_nsec=stop->tv_nsec - start->tv_nsec;
+    printf("\n********************In sequencer********************\n");
+    struct timeval current_time_val;
+    struct timespec delay_time = {1,0}; // delay for 33.33 msec, 30 Hz
+    //struct timespec delay_time = {0,100000000};
+    struct timespec remaining_time;
+    double current_time;
+    double residual;
+    int rc, delay_cnt=0;
+    unsigned long long seqCnt=0;
+    threadParams_t *threadParams = (threadParams_t *)threadp;
 
-  // case 1 - less than a second of change
-  if(dt_sec == 0)
-  {
-	  if(dt_nsec >= 0)
-	  {
-		  delta_t->tv_sec = 0;
-		  delta_t->tv_nsec = dt_nsec;
-	  }
+    double sequence_jitter, sequence_deadline;
+    double sequence_starttime = 0;
+    double sequence_endtime = 0;
+    double sequence_time;
+    double sequence_wcet = 0;
+    double sequence_totaltime = 0;
+    double sequence_totalwcet = 0;
 
-	  else // dt_nsec < 0 means stop is earlier than start
-	  {
-		 return(ERROR);  
-	  }
-  }
+    gettimeofday(&current_time_val, (struct timezone *)0);
+    syslog(LOG_CRIT, "Sequencer thread @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
+    printf("Sequencer thread @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
 
-  // case 2 - more than a second of change, check for roll-over
-  else if(dt_sec > 0)
-  {
-	  if(dt_nsec >= 0)
-	  {
-		  delta_t->tv_sec = dt_sec;
-		  delta_t->tv_nsec = dt_nsec;
-	  }
+    do
+    {
+        delay_cnt=0; residual=0.0;
 
-	  else // dt_nsec < 0 means roll over
-	  {
-		  delta_t->tv_sec = dt_sec-1;
-		  delta_t->tv_nsec = NSEC_PER_SEC - dt_nsec;
-	  }
-  }
+        //gettimeofday(&current_time_val, (struct timezone *)0);
+        //syslog(LOG_CRIT, "Sequencer thread prior to delay @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
+        do
+        {
+            rc=nanosleep(&delay_time, &remaining_time);
 
-  return(OK);
+            if(rc == EINTR)
+            { 
+                residual = remaining_time.tv_sec + ((double)remaining_time.tv_nsec / (double)NANOSEC_PER_SEC);
+
+                if(residual > 0.0) printf("residual=%lf, sec=%d, nsec=%d\n", residual, (int)remaining_time.tv_sec, (int)remaining_time.tv_nsec);
+ 
+                delay_cnt++;
+            }
+            else if(rc < 0)
+            {
+                perror("Sequencer nanosleep");
+                exit(-1);
+            }
+           
+        } while((residual > 0.0) && (delay_cnt < 100));
+
+        
+        gettimeofday(&current_time_val, (struct timezone *)0);
+        syslog(LOG_CRIT, "Sequencer cycle %llu @ sec=%d, msec=%d\n", seqCnt, (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
+
+        sequence_starttime = time_ms();
+        //printf("\nSequence started at %lf ms\n",sequence_starttime);
+
+        if(delay_cnt > 1) printf("Sequencer looping delay %d\n", delay_cnt);
+
+        // Release each service at a sub-rate of the generic sequencer rate
+
+
+        // Service_2 = RT_MAX-2	@ 1 Hz
+        if((seqCnt % 1) == 0)
+        {
+            printf("\nIn SEM_POST for 2\n");
+            sem_post(&semS2);
+        }
+        // Servcie_1 = RT_MAX-1	@ 1 Hz
+        if((seqCnt % 1) == 0) 
+        {
+            printf("\nIn SEM_POST for 1\n");
+            sem_post(&semS1);
+        }
+        
+        seqCnt++;
+        
+        syslog(LOG_INFO,"seqCnt = %d",seqCnt);
+        printf("\nseqCnt = %d\n",seqCnt);
+        
+        sequence_endtime = time_ms();
+        //printf("\nSequence ended at %lf ms\n",sequence_endtime);
+        
+        sequence_time = sequence_endtime - sequence_starttime;
+        printf("\nSequence each loop execution time  %lf ms\n",sequence_time);
+        sequence_totaltime += sequence_time;
+        //printf("\nSequence total time %lf ms\n",sequence_totaltime);
+        
+        if(sequence_wcet < sequence_time) sequence_wcet = sequence_time;
+        //printf("\nSequence WCET = %lf ms",sequence_wcet);
+    
+        sequence_totalwcet += sequence_wcet;
+        //printf("\nSequence Total WCET = %lf ms",sequence_totalwcet);
+        
+        //gettimeofday(&current_time_val, (struct timezone *)0);
+        //syslog(LOG_CRIT, "Sequencer release all sub-services @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
+
+    } while(!abortTest && (seqCnt <= frame_count));
+
+    sem_post(&semS1); 
+    sem_post(&semS2); 
+    
+   abortS1=TRUE; 
+   abortS2=TRUE;
+   
+   sequence_averagetime = (sequence_totaltime/frame_count);
+    printf("\nSequence Average Execution Time %lf ms\n",sequence_averagetime);
+    
+    sequence_averagewcet = (sequence_totalwcet/frame_count);
+    printf("\nSequence Average WCET %lf ms\n",sequence_averagewcet);
+    
+    sequence_deadline = (sequence_averagewcet/frame_count)*1; //1Hz
+    sequence_jitter = sequence_averagetime - sequence_deadline;
+    printf("\nSequence Jitter %lf ms\n",sequence_jitter);
+
+    pthread_exit((void *)0);
 }
+
 
 void print_scheduler(void)
 {
@@ -547,7 +617,6 @@ static void mainloop(void)
         fprintf(stderr, "select timeout\n");
         exit(EXIT_FAILURE);
     }
-    clock_gettime(CLOCK_REALTIME,&img_start_time);
     if (read_frame())
     {
         if(nanosleep(&read_delay, &time_error) != 0)
@@ -977,127 +1046,6 @@ static void close_device(void)
 
         fd = -1;
 }
-
-
-void *Sequencer(void *threadp)
-{
-    printf("\n********************In sequencer********************\n");
-    struct timeval current_time_val;
-    struct timespec delay_time = {1,0}; // delay for 33.33 msec, 30 Hz
-    //struct timespec delay_time = {0,100000000};
-    struct timespec remaining_time;
-    double current_time;
-    double residual;
-    int rc, delay_cnt=0;
-    unsigned long long seqCnt=0;
-    threadParams_t *threadParams = (threadParams_t *)threadp;
-
-    double sequence_jitter, sequence_deadline;
-    double sequence_starttime = 0;
-    double sequence_endtime = 0;
-    double sequence_time;
-    double sequence_wcet = 0;
-    double sequence_totaltime = 0;
-    double sequence_totalwcet = 0;
-
-    gettimeofday(&current_time_val, (struct timezone *)0);
-    syslog(LOG_CRIT, "Sequencer thread @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
-    printf("Sequencer thread @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
-
-    do
-    {
-        delay_cnt=0; residual=0.0;
-
-        //gettimeofday(&current_time_val, (struct timezone *)0);
-        //syslog(LOG_CRIT, "Sequencer thread prior to delay @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
-        do
-        {
-            rc=nanosleep(&delay_time, &remaining_time);
-
-            if(rc == EINTR)
-            { 
-                residual = remaining_time.tv_sec + ((double)remaining_time.tv_nsec / (double)NANOSEC_PER_SEC);
-
-                if(residual > 0.0) printf("residual=%lf, sec=%d, nsec=%d\n", residual, (int)remaining_time.tv_sec, (int)remaining_time.tv_nsec);
- 
-                delay_cnt++;
-            }
-            else if(rc < 0)
-            {
-                perror("Sequencer nanosleep");
-                exit(-1);
-            }
-           
-        } while((residual > 0.0) && (delay_cnt < 100));
-
-        
-        gettimeofday(&current_time_val, (struct timezone *)0);
-        syslog(LOG_CRIT, "Sequencer cycle %llu @ sec=%d, msec=%d\n", seqCnt, (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
-
-        sequence_starttime = time_ms();
-        //printf("\nSequence started at %lf ms\n",sequence_starttime);
-
-        if(delay_cnt > 1) printf("Sequencer looping delay %d\n", delay_cnt);
-
-        // Release each service at a sub-rate of the generic sequencer rate
-
-
-        // Service_2 = RT_MAX-2	@ 1 Hz
-        if((seqCnt % 1) == 0)
-        {
-            printf("\nIn SEM_POST for 2\n");
-            sem_post(&semS2);
-        }
-        // Servcie_1 = RT_MAX-1	@ 1 Hz
-        if((seqCnt % 1) == 0) 
-        {
-            printf("\nIn SEM_POST for 1\n");
-            sem_post(&semS1);
-        }
-        
-        seqCnt++;
-        
-        syslog(LOG_INFO,"seqCnt = %d",seqCnt);
-        printf("\nseqCnt = %d\n",seqCnt);
-        
-        sequence_endtime = time_ms();
-        //printf("\nSequence ended at %lf ms\n",sequence_endtime);
-        
-        sequence_time = sequence_endtime - sequence_starttime;
-        printf("\nSequence each loop execution time  %lf ms\n",sequence_time);
-        sequence_totaltime += sequence_time;
-        //printf("\nSequence total time %lf ms\n",sequence_totaltime);
-        
-        if(sequence_wcet < sequence_time) sequence_wcet = sequence_time;
-        //printf("\nSequence WCET = %lf ms",sequence_wcet);
-    
-        sequence_totalwcet += sequence_wcet;
-        //printf("\nSequence Total WCET = %lf ms",sequence_totalwcet);
-        
-        //gettimeofday(&current_time_val, (struct timezone *)0);
-        //syslog(LOG_CRIT, "Sequencer release all sub-services @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
-
-    } while(!abortTest && (seqCnt <= frame_count));
-
-    sem_post(&semS1); 
-    sem_post(&semS2); 
-    
-   abortS1=TRUE; 
-   abortS2=TRUE;
-   
-   sequence_averagetime = (sequence_totaltime/frame_count);
-    printf("\nSequence Average Execution Time %lf ms\n",sequence_averagetime);
-    
-    sequence_averagewcet = (sequence_totalwcet/frame_count);
-    printf("\nSequence Average WCET %lf ms\n",sequence_averagewcet);
-    
-    sequence_deadline = (sequence_averagewcet/frame_count)*1; //1Hz
-    sequence_jitter = sequence_averagetime - sequence_deadline;
-    printf("\nSequence Jitter %lf ms\n",sequence_jitter);
-
-    pthread_exit((void *)0);
-}
-
 
 
 int main(int argc, char **argv)
