@@ -109,7 +109,7 @@ struct buffer          *buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
-static int              frame_count = 180;
+static int              frame_count = 1801;
 int size;
 
 int abortTest=FALSE;
@@ -209,6 +209,12 @@ void *Service_1(void *threadp)
         service1_starttime = time_ms();
         printf("\nService 1 started at %lf ms\n",service1_starttime);
         mainloop();
+        
+        for(int i=0;i<(640*480*3);i++)
+        {
+            arr_img[S1Cnt % 60][i] = bigbuffer[i];
+        }
+        
         service1_endtime = time_ms();
         //printf("\nService 1 ended at %lf ms\n",service1_endtime);
         
@@ -264,12 +270,6 @@ void *Service_2(void *threadp)
     while(!abortS2)
     {
         sem_wait(&semS2);
-        
-        service2_starttime_prev = service2_starttime;
-        for(int i=0;i<(640*480*3);i++)
-        {
-            arr_img[S2Cnt % 60][i] = bigbuffer[i];
-        }
         
         service2_starttime_prev = service2_starttime;
         printf("\nService 2 previously started at %lf ms\n",service2_starttime_prev);
