@@ -134,6 +134,7 @@ char vres_string[3];
 double exec_time, exec_time_max;
 double service1_averagetime, service2_averagetime,service1_averagewcet,service2_averagewcet;
 double sequence_averagetime,sequence_averagewcet;
+double sequence_averagejitter, service1_averagejitter, service2_averagejitter;
 unsigned char arr_img[60][640*480*3];
 
 FLOAT PSF[9] = {-K/8.0, -K/8.0, -K/8.0, -K/8.0, K+1.0, -K/8.0, -K/8.0, -K/8.0, -K/8.0};
@@ -187,14 +188,14 @@ void *Service_1(void *threadp)
 {
     struct timespec current_time_val;
     double current_realtime;
-    unsigned long long S1Cnt=0;
-    double service1_starttime;
+    int S1Cnt=0;
+    double service1_starttime = 0;
     double service1_endtime;
     double service1_time;
-    double service1_jitter, service1_deadline;
     double service1_wcet = 0;
     double service1_totaltime = 0;
-    double service1_totalwcet = 0;
+    double service1_jitter, service1_refjitter, service1_starttime_prev = 0;
+    double service1_totaljitter = 0;
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
@@ -203,39 +204,42 @@ void *Service_1(void *threadp)
     {
         sem_wait(&semS1);
         
+        service1_starttime_prev = service1_starttime;
+        printf("\nService 1 previously started at %lf ms\n",service1_starttime_prev);
         service1_starttime = time_ms();
-        //printf("\nService 1 started at %lf ms\n",service1_starttime);
+        printf("\nService 1 started at %lf ms\n",service1_starttime);
         mainloop();
         service1_endtime = time_ms();
         //printf("\nService 1 ended at %lf ms\n",service1_endtime);
         
         service1_time = service1_endtime - service1_starttime;
-        printf("\nImage captured!\tTime taken: %lf ms\n",service1_time);
+        //printf("\nImage captured!\tTime taken: %lf ms\n",service1_time);
         service1_totaltime += service1_time;
         //printf("\nService 1 total time %lf ms\n",service1_totaltime);
         
         if(S1Cnt!=0)
         if(service1_wcet < service1_time) service1_wcet = service1_time;
         //printf("\nService 1 WCET = %lf ms",service1_wcet);
-        service1_totalwcet += service1_wcet;
-        //printf("\nService 1 Total WCET = %lf ms",service1_totalwcet);
+        printf("\nS1Cnt = %d\n",S1Cnt);
         
+        if(S1Cnt != 0)
+        {
+            service1_jitter = (service1_starttime_prev + 1000) - service1_starttime; //1Hz = 1000ms
+            printf("\nService 1 each jitter = %lf ms\n",service1_jitter);
+            service1_totaljitter += service1_jitter;
+            printf("\nService 1 total jitter = %lf ms\n",service1_totaljitter);
+        }
         S1Cnt++;
         syslog(LOG_INFO,"S1Cnt = %d",S1Cnt);
-        //printf("\nS1Cnt = %d\n",S1Cnt);
         clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
         syslog(LOG_CRIT, "S1 50 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S1Cnt, current_realtime-start_realtime);
     }
     
     service1_averagetime = (service1_totaltime/frame_count);
-    printf("\nService 1 Average Execution Time %lf ms\n",service1_averagetime);
-    
-    service1_averagewcet = (service1_totalwcet/frame_count);
-    printf("\nService 1 Average WCET %lf ms\n",service1_averagewcet);
-    
-    service1_deadline = (service1_averagewcet/frame_count)*1; //1Hz
-    service1_jitter = service1_averagetime - service1_deadline;
-    printf("\nService 1 Jitter %lf ms\n",service1_jitter);
+    printf("\n^^^^^^^^^^^^Service 1 Average Execution Time %lf ms\n",service1_averagetime);
+    printf("\n^^^^^^^^^^^^Service 1 WCET = %lf ms",service1_wcet);
+    service1_averagejitter = service1_totaljitter/frame_count;
+    printf("\n^^^^^^^^^^^^Service 1 Average Jitter %lf ms\n",service1_averagejitter);
     
     pthread_exit((void *)0);
 }
@@ -244,14 +248,14 @@ void *Service_2(void *threadp)
 {
     struct timespec current_time_val;
     double current_realtime;
-    unsigned long long S2Cnt=0;
-    double service2_jitter, service2_deadline;
-    double service2_starttime;
+    int S2Cnt=0;
+    double service2_starttime = 0;
     double service2_endtime;
     double service2_time;
+    double service2_jitter, service2_refjitter, service2_starttime_prev = 0;
+    double service2_totaljitter = 0;
     double service2_wcet = 0;
     double service2_totaltime = 0;
-    double service2_totalwcet = 0;
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
@@ -260,48 +264,56 @@ void *Service_2(void *threadp)
     while(!abortS2)
     {
         sem_wait(&semS2);
+        
+        service2_starttime_prev = service2_starttime;
         for(int i=0;i<(640*480*3);i++)
         {
             arr_img[S2Cnt % 60][i] = bigbuffer[i];
         }
-    
+        
+        service2_starttime_prev = service2_starttime;
+        printf("\nService 2 previously started at %lf ms\n",service2_starttime_prev);
         service2_starttime = time_ms();
-        //printf("\nService 2 started at %lf ms\n",service2_starttime);
+        printf("\nService 2 started at %lf ms\n",service2_starttime);
         if(S2Cnt != 0) 
         {
             framecnt++;
             dump_ppm(bigbuffer, g_size, framecnt, &frame_time);
-            printf("\nImage %d dumped!\t",framecnt);
+           // printf("\nImage %d dumped!\t",framecnt);
         }
         service2_endtime = time_ms();
         //printf("\nService 2 ended at %lf ms\n",service2_endtime);
         
         service2_time = service2_endtime - service2_starttime;
-        printf("Time taken:  %lf ms\n",service2_time);
+        //printf("Time taken:  %lf ms\n",service2_time);
         service2_totaltime += service2_time;
         //printf("\nService 2 total time %lf ms\n",service2_totaltime);
         
+        
         if(service2_wcet < service2_time) service2_wcet = service2_time;
         //printf("\nService 2 WCET = %lf ms",service2_wcet);
-        service2_totalwcet += service2_wcet;
-        //printf("\nService 2 Total WCET = %lf ms",service2_totalwcet);
         
+        //printf("\nS2Cnt = %d\n",S2Cnt);
+        if(S2Cnt != 0) 
+        {
+            service2_jitter = (service2_starttime_prev + 1000) - service2_starttime; //1Hz = 1000ms
+            
+            service2_totaljitter += service2_jitter;
+            printf("\nService 2 each jitter = %lf ms\n",service2_jitter);
+            //printf("\nService 2 total jitter = %lf ms\n",service2_totaljitter);
+        }
         S2Cnt++;
         syslog(LOG_INFO,"S2Cnt = %d",S2Cnt);
-        //printf("\nS2Cnt = %d\n",S2Cnt);
+        
         clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
         syslog(LOG_CRIT, "S2 20 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S2Cnt, current_realtime-start_realtime);
     }
 
     service2_averagetime = (service2_totaltime/frame_count);
-    printf("\nService 2 Average Execution Time %lf ms\n",service2_averagetime);
-    
-    service2_averagewcet = (service2_totalwcet/frame_count);
-    printf("\nService 2 Average WCET %lf ms\n",service2_averagewcet);
-    
-    service2_deadline = (service2_averagewcet/frame_count)*1; //1Hz
-    service2_jitter = service2_averagetime - service2_deadline;
-    printf("\nService 2 Jitter %lf ms\n",service2_jitter);
+    printf("\n------------Service 2 Average Execution Time %lf ms\n",service2_averagetime);
+    printf("\n------------Service 2 WCET = %lf ms",service2_wcet);
+    service2_averagejitter = service2_totaljitter/frame_count;
+    printf("\n------------Service 2 Average Jitter %lf ms\n",service2_averagejitter);
     
     pthread_exit((void *)0);
 }
@@ -314,17 +326,17 @@ void *Sequencer(void *threadp)
     struct timespec remaining_time;
     double current_time;
     double residual;
+    double sequence_jitter, sequence_refjitter, sequence_starttime_prev = 0;
+    double sequence_totaljitter = 0;
     int rc, delay_cnt=0;
-    unsigned long long seqCnt=0;
+    int seqCnt=0;
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
-    double sequence_jitter, sequence_deadline;
     double sequence_starttime = 0;
     double sequence_endtime = 0;
     double sequence_time;
     double sequence_wcet = 0;
     double sequence_totaltime = 0;
-    double sequence_totalwcet = 0;
 
     gettimeofday(&current_time_val, (struct timezone *)0);
     syslog(LOG_CRIT, "Sequencer thread @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
@@ -356,12 +368,15 @@ void *Sequencer(void *threadp)
            
         } while((residual > 0.0) && (delay_cnt < 100));
 
-        
+        if(seqCnt == 0) sequence_refjitter = time_ms();
+       
         gettimeofday(&current_time_val, (struct timezone *)0);
         syslog(LOG_CRIT, "Sequencer cycle %llu @ sec=%d, msec=%d\n", seqCnt, (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
 
+        sequence_starttime_prev = sequence_starttime;        
+        printf("\nSequence previously started at %lf ms\n",sequence_starttime_prev);
         sequence_starttime = time_ms();
-        //printf("\nSequence started at %lf ms\n",sequence_starttime);
+        printf("\nSequence started at %lf ms\n",sequence_starttime);
 
         if(delay_cnt > 1) printf("Sequencer looping delay %d\n", delay_cnt);
 
@@ -377,24 +392,29 @@ void *Sequencer(void *threadp)
             sem_post(&semS1);
         }
         
+        //printf("\nseqCnt = %d\n",seqCnt);
+        
+        if(seqCnt != 0)
+        {
+            sequence_jitter = (sequence_starttime_prev + 1000) - sequence_starttime; //1Hz = 1000ms
+            printf("\nSequence each jitter = %lf ms\n",sequence_jitter);
+            sequence_totaljitter += sequence_jitter;
+            //printf("\nSequence total jitter = %lf ms\n",sequence_totaljitter);
+        }
         seqCnt++;
         
-        syslog(LOG_INFO,"seqCnt = %d",seqCnt);
         //printf("\nseqCnt = %d\n",seqCnt);
         
         sequence_endtime = time_ms();
         //printf("\nSequence ended at %lf ms\n",sequence_endtime);
         
         sequence_time = sequence_endtime - sequence_starttime;
-        printf("\nSequencer executed!\tTime taken:  %lf ms\n",sequence_time);
+        //printf("\nSequencer executed!\tTime taken:  %lf ms\n",sequence_time);
         sequence_totaltime += sequence_time;
         //printf("\nSequence total time %lf ms\n",sequence_totaltime);
         
         if(sequence_wcet < sequence_time) sequence_wcet = sequence_time;
         //printf("\nSequence WCET = %lf ms",sequence_wcet);
-    
-        sequence_totalwcet += sequence_wcet;
-        //printf("\nSequence Total WCET = %lf ms",sequence_totalwcet);
         
         //gettimeofday(&current_time_val, (struct timezone *)0);
         //syslog(LOG_CRIT, "Sequencer release all sub-services @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
@@ -404,18 +424,14 @@ void *Sequencer(void *threadp)
     sem_post(&semS1); 
     sem_post(&semS2); 
     
-   abortS1=TRUE; 
-   abortS2=TRUE;
+    abortS1=TRUE; 
+    abortS2=TRUE;
    
-   sequence_averagetime = (sequence_totaltime/frame_count);
-    printf("\nSequence Average Execution Time %lf ms\n",sequence_averagetime);
-    
-    sequence_averagewcet = (sequence_totalwcet/frame_count);
-    printf("\nSequence Average WCET %lf ms\n",sequence_averagewcet);
-    
-    sequence_deadline = (sequence_averagewcet/frame_count)*1; //1Hz
-    sequence_jitter = sequence_averagetime - sequence_deadline;
-    printf("\nSequence Jitter %lf ms\n",sequence_jitter);
+    sequence_averagetime = (sequence_totaltime/frame_count);
+    printf("\n++++++++++++Sequence Average Execution Time %lf ms\n",sequence_averagetime);
+    printf("\n++++++++++++Sequence WCET = %lf ms",sequence_wcet);
+    sequence_averagejitter = sequence_totaljitter/frame_count;
+    printf("\n++++++++++++Sequence Average Jitter %lf ms\n",sequence_averagejitter);
 
     pthread_exit((void *)0);
 }
@@ -1142,10 +1158,10 @@ int main(int argc, char **argv)
     
         
     CPU_ZERO(&threadcpu);
-    CPU_SET(2, &threadcpu);
+    CPU_SET(3, &threadcpu);
     
     rc=pthread_attr_setaffinity_np(&rt_sched_attr[2], sizeof(cpu_set_t), &threadcpu);
-    rt_param[2].sched_priority=rt_max_prio - 1;
+    rt_param[2].sched_priority=rt_max_prio - 2;
     rc=pthread_create(&threads[2], &rt_sched_attr[2], Service_2, (void *)&(threadParams[2]));
     if(rc < 0)
         perror("pthread_create for service 2");
