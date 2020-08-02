@@ -185,7 +185,6 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
 
 void *Service_1(void *threadp)
 {
-    printf("\n*********************In service 1****************************\n");
     struct timespec current_time_val;
     double current_realtime;
     unsigned long long S1Cnt=0;
@@ -205,25 +204,25 @@ void *Service_1(void *threadp)
         sem_wait(&semS1);
         
         service1_starttime = time_ms();
-        printf("\nService 1 started at %lf ms\n",service1_starttime);
+        //printf("\nService 1 started at %lf ms\n",service1_starttime);
         mainloop();
         service1_endtime = time_ms();
-        printf("\nService 1 ended at %lf ms\n",service1_endtime);
+        //printf("\nService 1 ended at %lf ms\n",service1_endtime);
         
         service1_time = service1_endtime - service1_starttime;
-        printf("\nService 1 each loop execution time  %lf ms\n",service1_time);
+        printf("\nImage captured!\tTime taken: %lf ms\n",service1_time);
         service1_totaltime += service1_time;
-        printf("\nService 1 total time %lf ms\n",service1_totaltime);
+        //printf("\nService 1 total time %lf ms\n",service1_totaltime);
         
         if(S1Cnt!=0)
         if(service1_wcet < service1_time) service1_wcet = service1_time;
-        printf("\nService 1 WCET = %lf ms",service1_wcet);
+        //printf("\nService 1 WCET = %lf ms",service1_wcet);
         service1_totalwcet += service1_wcet;
-        printf("\nService 1 Total WCET = %lf ms",service1_totalwcet);
+        //printf("\nService 1 Total WCET = %lf ms",service1_totalwcet);
         
         S1Cnt++;
         syslog(LOG_INFO,"S1Cnt = %d",S1Cnt);
-        printf("\nS1Cnt = %d\n",S1Cnt);
+        //printf("\nS1Cnt = %d\n",S1Cnt);
         clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
         syslog(LOG_CRIT, "S1 50 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S1Cnt, current_realtime-start_realtime);
     }
@@ -243,7 +242,6 @@ void *Service_1(void *threadp)
 
 void *Service_2(void *threadp)
 {
-    printf("\n******************In service 2*********************\n");
     struct timespec current_time_val;
     double current_realtime;
     unsigned long long S2Cnt=0;
@@ -262,37 +260,35 @@ void *Service_2(void *threadp)
     while(!abortS2)
     {
         sem_wait(&semS2);
-        
-        
         for(int i=0;i<(640*480*3);i++)
         {
             arr_img[S2Cnt % 60][i] = bigbuffer[i];
         }
     
-        printf("\nFramecnt is %d", framecnt);
         service2_starttime = time_ms();
-        printf("\nService 2 started at %lf ms\n",service2_starttime);
+        //printf("\nService 2 started at %lf ms\n",service2_starttime);
         if(S2Cnt != 0) 
         {
             framecnt++;
             dump_ppm(bigbuffer, g_size, framecnt, &frame_time);
+            printf("\nImage %d dumped!\t",framecnt);
         }
         service2_endtime = time_ms();
-        printf("\nService 2 ended at %lf ms\n",service2_endtime);
+        //printf("\nService 2 ended at %lf ms\n",service2_endtime);
         
         service2_time = service2_endtime - service2_starttime;
-        printf("\nService 2 each loop execution time  %lf ms\n",service2_time);
+        printf("Time taken:  %lf ms\n",service2_time);
         service2_totaltime += service2_time;
-        printf("\nService 2 total time %lf ms\n",service2_totaltime);
+        //printf("\nService 2 total time %lf ms\n",service2_totaltime);
         
         if(service2_wcet < service2_time) service2_wcet = service2_time;
-        printf("\nService 2 WCET = %lf ms",service2_wcet);
+        //printf("\nService 2 WCET = %lf ms",service2_wcet);
         service2_totalwcet += service2_wcet;
-        printf("\nService 2 Total WCET = %lf ms",service2_totalwcet);
+        //printf("\nService 2 Total WCET = %lf ms",service2_totalwcet);
         
         S2Cnt++;
         syslog(LOG_INFO,"S2Cnt = %d",S2Cnt);
-        printf("\nS2Cnt = %d\n",S2Cnt);
+        //printf("\nS2Cnt = %d\n",S2Cnt);
         clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
         syslog(LOG_CRIT, "S2 20 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S2Cnt, current_realtime-start_realtime);
     }
@@ -312,7 +308,6 @@ void *Service_2(void *threadp)
 
 void *Sequencer(void *threadp)
 {
-    printf("\n********************In sequencer********************\n");
     struct timeval current_time_val;
     struct timespec delay_time = {1,0}; // delay for 33.33 msec, 30 Hz
     //struct timespec delay_time = {0,100000000};
@@ -333,7 +328,7 @@ void *Sequencer(void *threadp)
 
     gettimeofday(&current_time_val, (struct timezone *)0);
     syslog(LOG_CRIT, "Sequencer thread @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
-    printf("Sequencer thread @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
+    //printf("Sequencer thread @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
 
     do
     {
@@ -371,31 +366,27 @@ void *Sequencer(void *threadp)
         if(delay_cnt > 1) printf("Sequencer looping delay %d\n", delay_cnt);
 
         // Release each service at a sub-rate of the generic sequencer rate
-
-
         // Service_2 = RT_MAX-2	@ 1 Hz
         if((seqCnt % 1) == 0)
         {
-            printf("\nIn SEM_POST for 2\n");
             sem_post(&semS2);
         }
         // Servcie_1 = RT_MAX-1	@ 1 Hz
         if((seqCnt % 1) == 0) 
         {
-            printf("\nIn SEM_POST for 1\n");
             sem_post(&semS1);
         }
         
         seqCnt++;
         
         syslog(LOG_INFO,"seqCnt = %d",seqCnt);
-        printf("\nseqCnt = %d\n",seqCnt);
+        //printf("\nseqCnt = %d\n",seqCnt);
         
         sequence_endtime = time_ms();
         //printf("\nSequence ended at %lf ms\n",sequence_endtime);
         
         sequence_time = sequence_endtime - sequence_starttime;
-        printf("\nSequence each loop execution time  %lf ms\n",sequence_time);
+        printf("\nSequencer executed!\tTime taken:  %lf ms\n",sequence_time);
         sequence_totaltime += sequence_time;
         //printf("\nSequence total time %lf ms\n",sequence_totaltime);
         
@@ -580,7 +571,6 @@ static int read_frame(void)
 
 static void mainloop(void)
 {
-    printf("In mainloop\n");
     unsigned int count;
     float rate = 0;
     struct timespec read_delay;
