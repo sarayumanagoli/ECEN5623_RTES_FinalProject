@@ -99,6 +99,7 @@ struct timespec start_time_val;
 double start_realtime;
 sem_t semS1,semS2;
 int g_size;
+struct utsname hostname;
 
 static char            *dev_name;
 //static enum io_method   io = IO_METHOD_USERPTR;
@@ -109,7 +110,7 @@ struct buffer          *buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
-static int              frame_count = 1801;
+int frame_count;
 int size;
 
 int abortTest=FALSE;
@@ -121,12 +122,15 @@ pthread_attr_t main_sched_attr;
 int rt_max_prio, rt_min_prio, min;
 struct sched_param main_param;
 
-char ppm_header[50];
-char ppm_dumpname[]="test00000000.ppm";
+#define str_hres "640"
+#define str_vres "480"
 
-//resolutions
-static int HRES;
-static int VRES;
+static int HRES_STR;
+static int VRES_STR;
+
+
+char ppm_header[150] ="P6\n#9999999999 sec 9999999999 msec \n"str_hres" "str_vres"\n255\n";
+char ppm_dumpname[]="test00000000.ppm";
 
 char hres_string[3];
 char vres_string[3];
@@ -157,18 +161,26 @@ double time_ms()
 //PPM image format
 static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec *time)
 {
-    struct utsname hostname;
-    char timestampbuffer[100] = "\0";
+    //printf("\n]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]dump starts\n");
     int written, i, total, dumpfd;
-    uname(&hostname);
-   
+    
     snprintf(&ppm_dumpname[4], 9, "%08d", tag);
     strncat(&ppm_dumpname[12], ".ppm", 5);
     dumpfd = open(ppm_dumpname, O_WRONLY | O_NONBLOCK | O_CREAT, 00666);
- 
+
     snprintf(&ppm_header[4], 11, "%010d", (int)time->tv_sec);
     strncat(&ppm_header[14], " sec ", 5);
     snprintf(&ppm_header[19], 11, "%010d", (int)((time->tv_nsec)/1000000));
+    strncat(&ppm_header[29], " msec \n"str_hres" "str_vres"\n255\n", 19);
+   
+    strncat(&ppm_header[48], "#Machine: ", 10);
+    strncat(&ppm_header[58], hostname.machine , strlen(hostname.machine));
+    strncat(&ppm_header[58+strlen(hostname.machine)], " Node name: ", 12);
+    strncat(&ppm_header[60], hostname.nodename, strlen(hostname.nodename));
+    strncat(&ppm_header[60+strlen(hostname.nodename)], " System name: ", 14);
+    strncat(&ppm_header[74], hostname.sysname, strlen(hostname.sysname));
+    
+    
     written=write(dumpfd, ppm_header, sizeof(ppm_header));
 
     total=0;
@@ -178,9 +190,9 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
         written=write(dumpfd, p, size);
         total+=written;
     } while(total < size);
-    snprintf(timestampbuffer, sizeof(timestampbuffer), "./datetime.sh %s %s %s %s", hostname.machine, hostname.sysname, hostname.nodename, ppm_dumpname);
-    system(timestampbuffer);
+
     close(dumpfd);
+    //printf("\n]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]dump ends\n");
     
 }
 
@@ -205,37 +217,38 @@ void *Service_1(void *threadp)
         sem_wait(&semS1);
         
         service1_starttime_prev = service1_starttime;
-        printf("\nService 1 previously started at %lf ms\n",service1_starttime_prev);
+        //printf("\nService 1 previously started at %lf ms\n",service1_starttime_prev);
         service1_starttime = time_ms();
-        printf("\nService 1 started at %lf ms\n",service1_starttime);
+        //printf("\nService 1 started at %lf ms\n",service1_starttime);
         mainloop();
-        
-        for(int i=0;i<(640*480*3);i++)
-        {
-            arr_img[S1Cnt % 60][i] = bigbuffer[i];
-        }
-        
         service1_endtime = time_ms();
         //printf("\nService 1 ended at %lf ms\n",service1_endtime);
         
         service1_time = service1_endtime - service1_starttime;
-        //printf("\nImage captured!\tTime taken: %lf ms\n",service1_time);
+        printf("\nImage captured!\tTime taken: %lf ms\n",service1_time);
         service1_totaltime += service1_time;
         //printf("\nService 1 total time %lf ms\n",service1_totaltime);
         
         if(S1Cnt!=0)
         if(service1_wcet < service1_time) service1_wcet = service1_time;
         //printf("\nService 1 WCET = %lf ms",service1_wcet);
-        printf("\nS1Cnt = %d\n",S1Cnt);
+        //printf("\nS1Cnt = %d\n",S1Cnt);
         
         if(S1Cnt != 0)
         {
             service1_jitter = (service1_starttime_prev + 1000) - service1_starttime; //1Hz = 1000ms
-            printf("\nService 1 each jitter = %lf ms\n",service1_jitter);
+            //printf("\nService 1 each jitter = %lf ms\n",service1_jitter);
             service1_totaljitter += service1_jitter;
-            printf("\nService 1 total jitter = %lf ms\n",service1_totaljitter);
+            //printf("\nService 1 total jitter = %lf ms\n",service1_totaljitter);
         }
+                
         S1Cnt++;
+        for(int i=0;i<(640*480*3);i++)
+        {
+            arr_img[S1Cnt % 60][i] = bigbuffer[i];
+        }
+        
+        
         syslog(LOG_INFO,"S1Cnt = %d",S1Cnt);
         clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
         syslog(LOG_CRIT, "S1 50 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S1Cnt, current_realtime-start_realtime);
@@ -257,7 +270,7 @@ void *Service_2(void *threadp)
     int S2Cnt=0;
     double service2_starttime = 0;
     double service2_endtime;
-    double service2_time;
+    double service2_time = 0;
     double service2_jitter, service2_refjitter, service2_starttime_prev = 0;
     double service2_totaljitter = 0;
     double service2_wcet = 0;
@@ -272,20 +285,22 @@ void *Service_2(void *threadp)
         sem_wait(&semS2);
         
         service2_starttime_prev = service2_starttime;
-        printf("\nService 2 previously started at %lf ms\n",service2_starttime_prev);
+        //printf("\nService 2 previously started at %lf ms\n",service2_starttime_prev);
+
         service2_starttime = time_ms();
-        printf("\nService 2 started at %lf ms\n",service2_starttime);
+        //printf("\nService 2 started at %lf ms\n",service2_starttime);
         if(S2Cnt != 0) 
         {
             framecnt++;
-            dump_ppm(bigbuffer, g_size, framecnt, &frame_time);
-           // printf("\nImage %d dumped!\t",framecnt);
+            dump_ppm((arr_img + ((S2Cnt) % 60)), g_size, framecnt, &frame_time);
+            printf("\nImage %d dumped!\t",framecnt);
         }
         service2_endtime = time_ms();
         //printf("\nService 2 ended at %lf ms\n",service2_endtime);
         
+        
         service2_time = service2_endtime - service2_starttime;
-        //printf("Time taken:  %lf ms\n",service2_time);
+        printf("Time taken:  %lf ms\n",service2_time);
         service2_totaltime += service2_time;
         //printf("\nService 2 total time %lf ms\n",service2_totaltime);
         
@@ -297,16 +312,13 @@ void *Service_2(void *threadp)
         if(S2Cnt != 0) 
         {
             service2_jitter = (service2_starttime_prev + 1000) - service2_starttime; //1Hz = 1000ms
-            
             service2_totaljitter += service2_jitter;
-            printf("\nService 2 each jitter = %lf ms\n",service2_jitter);
+            //printf("\nService 2 each jitter = %lf ms\n",service2_jitter);
             //printf("\nService 2 total jitter = %lf ms\n",service2_totaljitter);
         }
         S2Cnt++;
         syslog(LOG_INFO,"S2Cnt = %d",S2Cnt);
         
-        clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
-        syslog(LOG_CRIT, "S2 20 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S2Cnt, current_realtime-start_realtime);
     }
 
     service2_averagetime = (service2_totaltime/frame_count);
@@ -370,13 +382,13 @@ void *Sequencer(void *threadp)
 
         if(seqCnt == 0) sequence_refjitter = time_ms();
        
-        gettimeofday(&current_time_val, (struct timezone *)0);
-        syslog(LOG_CRIT, "Sequencer cycle %llu @ sec=%d, msec=%d\n", seqCnt, (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
+        //gettimeofday(&current_time_val, (struct timezone *)0);
+       // syslog(LOG_CRIT, "Sequencer cycle %llu @ sec=%d, msec=%d\n", seqCnt, (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
 
         sequence_starttime_prev = sequence_starttime;        
-        printf("\nSequence previously started at %lf ms\n",sequence_starttime_prev);
+        //printf("\nSequence previously started at %lf ms\n",sequence_starttime_prev);
         sequence_starttime = time_ms();
-        printf("\nSequence started at %lf ms\n",sequence_starttime);
+        //printf("\nSequence started at %lf ms\n",sequence_starttime);
 
         if(delay_cnt > 1) printf("Sequencer looping delay %d\n", delay_cnt);
 
@@ -393,28 +405,27 @@ void *Sequencer(void *threadp)
         }
         
         //printf("\nseqCnt = %d\n",seqCnt);
+        sequence_endtime = time_ms();
+        //printf("\nSequence ended at %lf ms\n",sequence_endtime);
+        
+        sequence_time = sequence_endtime - sequence_starttime;
+        printf("\nSequencer executed!\tTime taken:  %lf ms\n",sequence_time);
+        sequence_totaltime += sequence_time;
+        //printf("\nSequence total time %lf ms\n",sequence_totaltime);
+        
+        if(sequence_wcet < sequence_time) sequence_wcet = sequence_time;
+        //printf("\nSequence WCET = %lf ms",sequence_wcet);
         
         if(seqCnt != 0)
         {
             sequence_jitter = (sequence_starttime_prev + 1000) - sequence_starttime; //1Hz = 1000ms
-            printf("\nSequence each jitter = %lf ms\n",sequence_jitter);
+            // printf("\nSequence each jitter = %lf ms\n",sequence_jitter);
             sequence_totaljitter += sequence_jitter;
             //printf("\nSequence total jitter = %lf ms\n",sequence_totaljitter);
         }
         seqCnt++;
         
         //printf("\nseqCnt = %d\n",seqCnt);
-        
-        sequence_endtime = time_ms();
-        //printf("\nSequence ended at %lf ms\n",sequence_endtime);
-        
-        sequence_time = sequence_endtime - sequence_starttime;
-        //printf("\nSequencer executed!\tTime taken:  %lf ms\n",sequence_time);
-        sequence_totaltime += sequence_time;
-        //printf("\nSequence total time %lf ms\n",sequence_totaltime);
-        
-        if(sequence_wcet < sequence_time) sequence_wcet = sequence_time;
-        //printf("\nSequence WCET = %lf ms",sequence_wcet);
         
         //gettimeofday(&current_time_val, (struct timezone *)0);
         //syslog(LOG_CRIT, "Sequencer release all sub-services @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
@@ -525,6 +536,8 @@ static void process_image(const void *p, int size)
     int i, k, newsize=0;
     unsigned char *pptr = (unsigned char *)p;
 
+    // record when process was called
+    clock_gettime(CLOCK_REALTIME, &frame_time);
 
     // This just dumps the frame to a file now, but you could replace with whatever image
     // processing you wish.
@@ -916,8 +929,8 @@ static void init_device(void)
     if (force_format)
     {
         printf("FORCING FORMAT\n");
-        fmt.fmt.pix.width       = HRES;
-        fmt.fmt.pix.height      = VRES;
+        fmt.fmt.pix.width       = HRES_STR;
+        fmt.fmt.pix.height      = VRES_STR;
 
         // Specify the Pixel Coding Formate here
 
@@ -1068,16 +1081,17 @@ int main(int argc, char **argv)
     cpu_set_t allcpuset;
     
     system("uname -a");
-
+    uname(&hostname);
+    
 	pthread_attr_t main_attr;
     dev_name = "/dev/video0";
    
-    HRES = atoi(argv[1]);
-    VRES = atoi(argv[2]);
-    printf("Resolution requested is:\nHorizontal = %d\nVertical = %d\n",HRES,VRES);
+    HRES_STR = atoi(argv[1]);
+    VRES_STR = atoi(argv[2]);
+    frame_count = atoi(argv[3]);
+    printf("Resolution requested is:\nHorizontal = %d\nVertical = %d\n",HRES_STR,VRES_STR);
     strncpy(hres_string,argv[1],sizeof(hres_string));
     strncpy(vres_string,argv[2],sizeof(vres_string));
-    sprintf(ppm_header,"P6\n#9999999999 sec 9999999999 msec \n%s %s\n255\n",hres_string,vres_string);
     
     syslog(LOG_INFO,"***********PROGRAM BEGINS************");
 
