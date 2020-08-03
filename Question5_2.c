@@ -44,6 +44,8 @@
 #include <syslog.h>
 #include <semaphore.h>
 #include <sched.h>
+#include <sys/socket.h> 
+#include <arpa/inet.h> 
 
 #include <sys/sysinfo.h>
 #include <linux/videodev2.h>
@@ -60,11 +62,12 @@
 #define USEC_PER_MSEC (1000)
 #define NANOSEC_PER_MSEC (1000000)
 #define NANOSEC_PER_SEC (1000000000)
-#define NUM_THREADS (3)
+//#define NUM_THREADS (4)
 #define TRUE (1)
 #define FALSE (0)
 #define SHARPEN
 #define K 4.0
+#define PORT 8080
 
 //definition of threads
 typedef struct
@@ -94,12 +97,21 @@ unsigned int framecnt=0;
 struct timespec frame_time;
 int flag = 0;
 double deadline;
-unsigned char bigbuffer[(640*480*3)];
+unsigned char bigbuffer[921600];
 struct timespec start_time_val;
 double start_realtime;
-sem_t semS1,semS2;
+sem_t semS1,semS2,semS3;
 int g_size;
 struct utsname hostname;
+
+struct sockaddr_in server_address;
+int sockfd;
+int image_size;
+static FILE *fptr;
+unsigned char client_buf[921600];
+int count = 0;
+int socket_enable;
+
 
 static char            *dev_name;
 //static enum io_method   io = IO_METHOD_USERPTR;
@@ -113,6 +125,7 @@ static int              force_format=1;
 int frame_count;
 int size;
 
+static int dump_flag = 0;
 int abortTest=FALSE;
 int abortS1=FALSE, abortS2=FALSE, abortS3=FALSE;
 
@@ -136,9 +149,9 @@ char hres_string[3];
 char vres_string[3];
 
 double exec_time, exec_time_max;
-double service1_averagetime, service2_averagetime,service1_averagewcet,service2_averagewcet;
+double service1_averagetime, service2_averagetime, service3_averagetime,service1_averagewcet,service2_averagewcet;
 double sequence_averagetime,sequence_averagewcet;
-double sequence_averagejitter, service1_averagejitter, service2_averagejitter;
+double sequence_averagejitter, service1_averagejitter, service2_averagejitter, service3_averagejitter;
 unsigned char arr_img[60][640*480*3];
 
 FLOAT PSF[9] = {-K/8.0, -K/8.0, -K/8.0, -K/8.0, K+1.0, -K/8.0, -K/8.0, -K/8.0, -K/8.0};
@@ -176,9 +189,10 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
     strncat(&ppm_header[48], "#Machine: ", 10);
     strncat(&ppm_header[58], hostname.machine , strlen(hostname.machine));
     strncat(&ppm_header[58+strlen(hostname.machine)], " Node name: ", 12);
-    strncat(&ppm_header[60], hostname.nodename, strlen(hostname.nodename));
-    strncat(&ppm_header[60+strlen(hostname.nodename)], " System name: ", 14);
-    strncat(&ppm_header[74], hostname.sysname, strlen(hostname.sysname));
+    strncat(&ppm_header[70+strlen(hostname.machine)], hostname.nodename, strlen(hostname.nodename));
+    strncat(&ppm_header[70+strlen(hostname.nodename)+strlen(hostname.nodename)], " System name: ", 14);
+    strncat(&ppm_header[84+strlen(hostname.nodename)+strlen(hostname.nodename)], hostname.sysname, strlen(hostname.sysname));
+    strncat(&ppm_header[84+strlen(hostname.machine)+strlen(hostname.nodename)+strlen(hostname.sysname)], "\n", 1);
     
     
     written=write(dumpfd, ppm_header, sizeof(ppm_header));
@@ -254,11 +268,14 @@ void *Service_1(void *threadp)
         syslog(LOG_CRIT, "S1 50 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S1Cnt, current_realtime-start_realtime);
     }
     
-    service1_averagetime = (service1_totaltime/frame_count);
-    printf("\n^^^^^^^^^^^^Service 1 Average Execution Time %lf ms\n",service1_averagetime);
-    printf("\n^^^^^^^^^^^^Service 1 WCET = %lf ms",service1_wcet);
+     printf("\n*********************SUMMARY*********************\n");
+       service1_averagetime = (service1_totaltime/frame_count);
+    printf("\nService 1 Average Execution Time %lf ms\n",service1_averagetime);
+    printf("\nService 1 WCET = %lf ms",service1_wcet);
     service1_averagejitter = service1_totaljitter/frame_count;
-    printf("\n^^^^^^^^^^^^Service 1 Average Jitter %lf ms\n",service1_averagejitter);
+    printf("\nService 1 Average Jitter %lf ms\n",service1_averagejitter);
+    printf("\n*************************************************\n");
+   
     
     pthread_exit((void *)0);
 }
@@ -294,6 +311,7 @@ void *Service_2(void *threadp)
             framecnt++;
             dump_ppm((arr_img + ((S2Cnt) % 60)), g_size, framecnt, &frame_time);
             printf("\nImage %d dumped!\t",framecnt);
+                    dump_flag = 1;
         }
         service2_endtime = time_ms();
         //printf("\nService 2 ended at %lf ms\n",service2_endtime);
@@ -319,13 +337,123 @@ void *Service_2(void *threadp)
         S2Cnt++;
         syslog(LOG_INFO,"S2Cnt = %d",S2Cnt);
         
+        if(socket_enable == 1)
+        {   
+            printf("Sem_POST 33333333333333");
+            sem_post(&semS3);
+        }
+        
     }
-
-    service2_averagetime = (service2_totaltime/frame_count);
-    printf("\n------------Service 2 Average Execution Time %lf ms\n",service2_averagetime);
-    printf("\n------------Service 2 WCET = %lf ms",service2_wcet);
+    printf("\n*********************SUMMARY*********************\n");
+      service2_averagetime = (service2_totaltime/frame_count);
+    printf("\nService 2 Average Execution Time %lf ms\n",service2_averagetime);
+    printf("\nService 2 WCET = %lf ms",service2_wcet);
     service2_averagejitter = service2_totaljitter/frame_count;
-    printf("\n------------Service 2 Average Jitter %lf ms\n",service2_averagejitter);
+    printf("\nService 2 Average Jitter %lf ms\n",service2_averagejitter);
+    printf("\n*************************************************\n");
+
+    
+    pthread_exit((void *)0);
+}
+
+void *Service_3(void *threadp)
+{
+    struct timespec current_time_val;
+    double current_realtime;
+    int S3Cnt=0;
+    double service3_starttime = 0;
+    double service3_endtime;
+    double service3_time;
+    double service3_jitter, service3_refjitter, service3_starttime_prev = 0;
+    double service3_totaljitter = 0;
+    double service3_wcet = 0;
+    double service3_totaltime = 0;
+    int image_number = 1;
+    
+    threadParams_t *threadParams = (threadParams_t *)threadp;
+
+    clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
+    syslog(LOG_CRIT, "S3 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
+
+    while(S3Cnt<=frame_count)
+    {
+        sem_wait(&semS3);
+        printf("\nS3Cnt = %d\n",S3Cnt);
+        printf("\nNum = %d",image_number);
+        service3_starttime_prev = service3_starttime;
+        printf("\nService 3 previously started at %lf ms\n",service3_starttime_prev);
+        service3_starttime = time_ms();
+        printf("\nService 3 started at %lf ms\n",service3_starttime);
+        printf("\n1\n");
+        
+        printf("\n DUMP FLAG!!! = %d\n",dump_flag);
+        if(dump_flag == 1)
+        {
+            dump_flag = 0;
+            snprintf(&ppm_dumpname[4], 9, "%08d", image_number);
+            strncat(&ppm_dumpname[12], ".ppm", 5);
+            printf("\n2\n");
+            fptr = fopen(ppm_dumpname,"r");
+            printf("\n3\n");
+            fseek(fptr,0,SEEK_END);
+            printf("\n4\n");
+            image_size = ftell(fptr);
+            printf("\n5\n");
+            fseek(fptr,0,SEEK_SET);
+            printf("\n6\n");
+            int size = fread(client_buf,1,sizeof(client_buf),fptr);
+
+            int rc = send(sockfd,(char *)&client_buf,size,0);
+
+            if(rc == -1)
+            {
+                syslog(LOG_INFO,"Unable to send socket");
+            }
+            else
+            {
+                syslog(LOG_INFO,"Socket Send %d SUCCESSFUL = %d bytes",count,rc);
+                printf("\nSent sockets successfully\n");
+                count++;
+            }
+            fclose(fptr);
+            image_number++;
+        }
+       
+        service3_endtime = time_ms();
+        //printf("\nService 2 ended at %lf ms\n",service2_endtime);
+        
+        service3_time = service3_endtime - service3_starttime;
+        //printf("Time taken:  %lf ms\n",service3_time);
+        service3_totaltime += service3_time;
+        //printf("\nService 3 total time %lf ms\n",service3_totaltime);
+        
+        
+        if(service3_wcet < service3_time) service3_wcet = service3_time;
+        //printf("\nService 3 WCET = %lf ms",service3_wcet);
+        
+        //printf("\nS3Cnt = %d\n",S3Cnt);
+        if(S3Cnt != 0) 
+        {
+            service3_jitter = (service3_starttime_prev + 1000) - service3_starttime; //1Hz = 1000ms
+            
+            service3_totaljitter += service3_jitter;
+            printf("\nService 3 each jitter = %lf ms\n",service3_jitter);
+            //printf("\nService 2 total jitter = %lf ms\n",service2_totaljitter);
+        }
+         S3Cnt++;
+        
+        syslog(LOG_INFO,"S3Cnt = %d",S3Cnt);
+        
+        clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
+        syslog(LOG_CRIT, "S3 20 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S3Cnt, current_realtime-start_realtime);
+    }
+    service3_averagetime = (service3_totaltime/frame_count);
+    printf("\n*********************SUMMARY*********************\n");
+    printf("\nService 3 Average Execution Time %lf ms\n",service3_averagetime);
+    printf("\nService 3 WCET = %lf ms",service3_wcet);
+    service3_averagejitter = service3_totaljitter/frame_count;
+    printf("\nService 3 Average Jitter %lf ms\n",service3_averagejitter);
+    printf("\n*************************************************\n");
     
     pthread_exit((void *)0);
 }
@@ -434,15 +562,19 @@ void *Sequencer(void *threadp)
 
     sem_post(&semS1); 
     sem_post(&semS2); 
+    sem_post(&semS3);
     
     abortS1=TRUE; 
     abortS2=TRUE;
-   
-    sequence_averagetime = (sequence_totaltime/frame_count);
-    printf("\n++++++++++++Sequence Average Execution Time %lf ms\n",sequence_averagetime);
-    printf("\n++++++++++++Sequence WCET = %lf ms",sequence_wcet);
+    abortS3=TRUE;
+     printf("\n*********************SUMMARY*********************\n");
+       sequence_averagetime = (sequence_totaltime/frame_count);
+    printf("\nSequence Average Execution Time %lf ms\n",sequence_averagetime);
+    printf("\nSequence WCET = %lf ms",sequence_wcet);
     sequence_averagejitter = sequence_totaljitter/frame_count;
-    printf("\n++++++++++++Sequence Average Jitter %lf ms\n",sequence_averagejitter);
+    printf("\nSequence Average Jitter %lf ms\n",sequence_averagejitter);
+    printf("\n*************************************************\n");
+    
 
     pthread_exit((void *)0);
 }
@@ -1071,7 +1203,6 @@ int main(int argc, char **argv)
 {
 	int i,rc,scope;
     cpu_set_t threadcpu;
-	pthread_t threads[NUM_THREADS];
 	threadParams_t threadParams[1];
 	pthread_attr_t rt_sched_attr[1];
 	int rt_max_prio, rt_min_prio;
@@ -1079,6 +1210,7 @@ int main(int argc, char **argv)
 	struct sched_param main_param;
     pid_t mainpid;
     cpu_set_t allcpuset;
+    int num_threads;
     
     system("uname -a");
     uname(&hostname);
@@ -1089,9 +1221,17 @@ int main(int argc, char **argv)
     HRES_STR = atoi(argv[1]);
     VRES_STR = atoi(argv[2]);
     frame_count = atoi(argv[3]);
+    socket_enable = atoi(argv[4]);
     printf("Resolution requested is:\nHorizontal = %d\nVertical = %d\n",HRES_STR,VRES_STR);
     strncpy(hres_string,argv[1],sizeof(hres_string));
     strncpy(vres_string,argv[2],sizeof(vres_string));
+    
+    if(socket_enable == 1)
+       num_threads = 4;
+    else
+       num_threads = 3;
+       
+    pthread_t threads[num_threads];
     
     syslog(LOG_INFO,"***********PROGRAM BEGINS************");
 
@@ -1100,6 +1240,7 @@ int main(int argc, char **argv)
 
     
     if (sem_init (&semS1, 0, 0)) { printf ("Failed to initialize S1 semaphore\n"); exit (-1); }
+    if (sem_init (&semS2, 0, 0)) { printf ("Failed to initialize S2 semaphore\n"); exit (-1); }
     if (sem_init (&semS2, 0, 0)) { printf ("Failed to initialize S2 semaphore\n"); exit (-1); }
     
     mainpid=getpid();
@@ -1126,7 +1267,7 @@ int main(int argc, char **argv)
     printf("rt_max_prio=%d\n", rt_max_prio);
     printf("rt_min_prio=%d\n", rt_min_prio);
 
-    for(i=0; i < NUM_THREADS; i++)
+    for(i=0; i < num_threads; i++)
     {
       rc=pthread_attr_init(&rt_sched_attr[i]);
       rc=pthread_attr_setinheritsched(&rt_sched_attr[i], PTHREAD_EXPLICIT_SCHED);
@@ -1142,6 +1283,26 @@ int main(int argc, char **argv)
     init_device();
     start_capturing();
     
+    if(socket_enable == 1)
+    {
+        printf("\nSocket enabled\n");
+        sockfd = socket(AF_INET, SOCK_STREAM, 0);
+        server_address.sin_family = AF_INET;
+        server_address.sin_port = htons(PORT);
+
+        // Convert IPv4 and IPv6 addresses from text to binary form
+        if(inet_pton(AF_INET, "10.0.0.196", &server_address.sin_addr)<=0)
+        {
+            printf("\nInvalid address/ Address not supported \n");
+            return -1;
+        }
+
+        if (connect(sockfd, (struct sockaddr *)&server_address, sizeof(server_address)) < 0)
+        {
+            printf("\nConnection Failed \n");
+            return -1;
+        }
+    }
 
     CPU_ZERO(&threadcpu);
     CPU_SET(3, &threadcpu);
@@ -1182,9 +1343,22 @@ int main(int argc, char **argv)
     else
         printf("pthread_create successful for service 2\n");
     
+    if(socket_enable == 1)
+    {
+        CPU_ZERO(&threadcpu);
+        CPU_SET(3, &threadcpu);
+        
+        rc=pthread_attr_setaffinity_np(&rt_sched_attr[3], sizeof(cpu_set_t), &threadcpu);
+        rt_param[3].sched_priority=rt_max_prio - 3;
+        rc=pthread_create(&threads[3], &rt_sched_attr[3], Service_3, (void *)&(threadParams[3]));
+        if(rc < 0)
+            perror("pthread_create for service 3");
+        else
+            printf("pthread_create successful for service 3\n");
+    }
     
     //Join to wait for completion of thread execution
-    for(i=0;i<NUM_THREADS;i++)
+    for(i=0;i<num_threads;i++)
        pthread_join(threads[i], NULL);
     
     stop_capturing();
