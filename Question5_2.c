@@ -142,7 +142,7 @@ static int HRES_STR;
 static int VRES_STR;
 
 
-char ppm_header[150] ="P6\n#9999999999 sec 9999999999 msec \n"str_hres" "str_vres"\n255\n";
+char ppm_header[400] ="P6\n#9999999999 sec 9999999999 msec \n"str_hres" "str_vres"\n255\n";
 char ppm_dumpname[]="test00000000.ppm";
 
 char hres_string[3];
