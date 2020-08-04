@@ -142,7 +142,7 @@ static int HRES_STR;
 static int VRES_STR;
 
 
-char ppm_header[400] ="P6\n#9999999999 sec 9999999999 msec \n"str_hres" "str_vres"\n255\n";
+char ppm_header[100]; //="P6\n#9999999999 sec 9999999999 msec \n"str_hres" "str_vres"\n255\n";
 char ppm_dumpname[]="test00000000.ppm";
 
 char hres_string[3];
@@ -152,7 +152,7 @@ double exec_time, exec_time_max;
 double service1_averagetime, service2_averagetime, service3_averagetime,service1_averagewcet,service2_averagewcet;
 double sequence_averagetime,sequence_averagewcet;
 double sequence_averagejitter, service1_averagejitter, service2_averagejitter, service3_averagejitter;
-unsigned char arr_img[60][640*480*3];
+unsigned char arr_img[60][921600];
 
 FLOAT PSF[9] = {-K/8.0, -K/8.0, -K/8.0, -K/8.0, K+1.0, -K/8.0, -K/8.0, -K/8.0, -K/8.0};
 static struct v4l2_format fmt;
@@ -181,18 +181,19 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
     strncat(&ppm_dumpname[12], ".ppm", 5);
     dumpfd = open(ppm_dumpname, O_WRONLY | O_NONBLOCK | O_CREAT, 00666);
 
+    strncat(&ppm_header[0],"P6\n#",4);
     snprintf(&ppm_header[4], 11, "%010d", (int)time->tv_sec);
     strncat(&ppm_header[14], " sec ", 5);
     snprintf(&ppm_header[19], 11, "%010d", (int)((time->tv_nsec)/1000000));
     strncat(&ppm_header[29], " msec \n"str_hres" "str_vres"\n255\n", 19);
    
-    strncat(&ppm_header[48], "#Machine: ", 10);
-    strncat(&ppm_header[58], hostname.machine , strlen(hostname.machine));
-    strncat(&ppm_header[58+strlen(hostname.machine)], " Node name: ", 12);
-    strncat(&ppm_header[70+strlen(hostname.machine)], hostname.nodename, strlen(hostname.nodename));
-    strncat(&ppm_header[70+strlen(hostname.nodename)+strlen(hostname.nodename)], " System name: ", 14);
-    strncat(&ppm_header[84+strlen(hostname.nodename)+strlen(hostname.nodename)], hostname.sysname, strlen(hostname.sysname));
-    strncat(&ppm_header[84+strlen(hostname.machine)+strlen(hostname.nodename)+strlen(hostname.sysname)], "\n", 1);
+    strncat(&ppm_header[48], "#Info: ", 7);
+    strncat(&ppm_header[55], hostname.version , strlen(hostname.version));
+    strncat(&ppm_header[55+strlen(hostname.version)], "\n", 1);
+    //strncat(&ppm_header[49+strlen(hostname.version)], hostname.nodename, strlen(hostname.nodename));
+    //strncat(&ppm_header[49+strlen(hostname.nodename)+strlen(hostname.nodename)], "\n", 1);
+    //strncat(&ppm_header[64+strlen(hostname.nodename)+strlen(hostname.nodename)], hostname.sysname, strlen(hostname.sysname));
+    //strncat(&ppm_header[64+strlen(hostname.machine)+strlen(hostname.nodename)+strlen(hostname.sysname)], "\n", 1);
     
     
     written=write(dumpfd, ppm_header, sizeof(ppm_header));
@@ -215,6 +216,7 @@ void *Service_1(void *threadp)
     struct timespec current_time_val;
     double current_realtime;
     int S1Cnt=0;
+    int j = 0;
     double service1_starttime = 0;
     double service1_endtime;
     double service1_time;
@@ -229,14 +231,16 @@ void *Service_1(void *threadp)
     while(!abortS1)
     {
         sem_wait(&semS1);
-        
+        j++;
         service1_starttime_prev = service1_starttime;
         //printf("\nService 1 previously started at %lf ms\n",service1_starttime_prev);
         service1_starttime = time_ms();
         //printf("\nService 1 started at %lf ms\n",service1_starttime);
+        syslog(LOG_INFO,"Service 1 started at %lf ms\n",service1_starttime);
         mainloop();
         service1_endtime = time_ms();
         //printf("\nService 1 ended at %lf ms\n",service1_endtime);
+        syslog(LOG_INFO,"Service 1 ended at %lf ms\n",service1_endtime);
         
         service1_time = service1_endtime - service1_starttime;
         printf("\nImage captured!\tTime taken: %lf ms\n",service1_time);
@@ -257,15 +261,13 @@ void *Service_1(void *threadp)
         }
                 
         S1Cnt++;
-        for(int i=0;i<(640*480*3);i++)
+        for(int i=0;i<921600;i++)
         {
-            arr_img[S1Cnt % 60][i] = bigbuffer[i];
+            arr_img[j % 60][i] = bigbuffer[i];
         }
         
         
         syslog(LOG_INFO,"S1Cnt = %d",S1Cnt);
-        clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
-        syslog(LOG_CRIT, "S1 50 Hz on core %d for release %llu @ sec=%6.9lf\n", sched_getcpu(), S1Cnt, current_realtime-start_realtime);
     }
     
      printf("\n*********************SUMMARY*********************\n");
@@ -306,16 +308,18 @@ void *Service_2(void *threadp)
 
         service2_starttime = time_ms();
         //printf("\nService 2 started at %lf ms\n",service2_starttime);
+        syslog(LOG_INFO,"Service 2 started at %lf ms\n",service2_starttime);
         if(S2Cnt != 0) 
         {
             framecnt++;
-            dump_ppm((arr_img + ((S2Cnt) % 60)), g_size, framecnt, &frame_time);
+            //dump_ppm((arr_img + ((S2Cnt) % 60)), g_size, framecnt, &frame_time);
+            dump_ppm(bigbuffer, g_size, framecnt, &frame_time);
             printf("\nImage %d dumped!\t",framecnt);
                     dump_flag = 1;
         }
         service2_endtime = time_ms();
         //printf("\nService 2 ended at %lf ms\n",service2_endtime);
-        
+        syslog(LOG_INFO,"Service 2 ended at %lf ms\n",service2_endtime);
         
         service2_time = service2_endtime - service2_starttime;
         printf("Time taken:  %lf ms\n",service2_time);
@@ -384,6 +388,7 @@ void *Service_3(void *threadp)
         printf("\nService 3 previously started at %lf ms\n",service3_starttime_prev);
         service3_starttime = time_ms();
         printf("\nService 3 started at %lf ms\n",service3_starttime);
+        syslog(LOG_INFO,"Service 3 started at %lf ms\n",service3_starttime);
         printf("\n1\n");
         
         printf("\n DUMP FLAG!!! = %d\n",dump_flag);

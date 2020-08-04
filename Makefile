@@ -7,12 +7,12 @@ CFLAGS= -O0 -g $(INCLUDE_DIRS) $(CDEFS)
 LIBS= -lpthread -lrt
 
 HFILES= 
-CFILES= Question5_2.c
+CFILES= main.c
 
 SRCS= ${HFILES} ${CFILES}
 OBJS= ${CFILES:.c=.o}
 
-all:	Question5_2
+all:	main
 
 clean:
 	-rm -f *.o *.d
@@ -22,7 +22,7 @@ clean:
 distclean:
 	-rm -f *.o *.d
 
-Question5_2: ${OBJS}
+main: ${OBJS}
 	$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $@.o $(LIBS)
 
 depend:
