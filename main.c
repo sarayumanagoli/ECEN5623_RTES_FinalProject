@@ -68,6 +68,7 @@
 #define SHARPEN
 #define K 4.0
 #define PORT 8080
+#define RIGHT_FRAME 10
 
 //definition of threads
 typedef struct
@@ -174,7 +175,6 @@ double time_ms()
 //PPM image format
 static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec *time)
 {
-    //printf("\n]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]dump starts\n");
     int written, i, total, dumpfd;
     
     snprintf(&ppm_dumpname[4], 9, "%08d", tag);
@@ -207,7 +207,6 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
     } while(total < size);
 
     close(dumpfd);
-    //printf("\n]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]dump ends\n");
     
 }
 
@@ -301,7 +300,7 @@ void *Service_2(void *threadp)
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
     syslog(LOG_CRIT, "S2 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
 
-    while(S2Cnt < (frame_count+1))
+    while(!abortS2)
     {
         sem_wait(&semS2);
         printf("\nIn Service 2 %d\n",S2Cnt);
@@ -311,9 +310,11 @@ void *Service_2(void *threadp)
         service2_starttime = time_ms();
         //printf("\nService 2 started at %lf ms\n",service2_starttime);
         syslog(LOG_INFO,"Service 2 started at %lf ms\n",service2_starttime);
-            
+        if(S2Cnt >= RIGHT_FRAME)
+        {
             dump_ppm((arr_img + ((S2Cnt) % 60)), g_size, framecnt, &frame_time);
             framecnt++;
+        }
         service2_endtime = time_ms();
         //printf("\nService 2 ended at %lf ms\n",service2_endtime);
         syslog(LOG_INFO,"Service 2 ended at %lf ms\n",service2_endtime);
@@ -562,7 +563,7 @@ void *Sequencer(void *threadp)
         //gettimeofday(&current_time_val, (struct timezone *)0);
         //syslog(LOG_CRIT, "Sequencer release all sub-services @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
 
-    } while(!abortTest && (seqCnt <= (frame_count+1)));
+    } while(!abortTest && (seqCnt <= (frame_count + RIGHT_FRAME)));
 
     sem_post(&semS1); 
     sem_post(&semS2); 
