@@ -213,6 +213,7 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
 
 void *Service_1(void *threadp)
 {
+    printf("\nIn Service 1 outside\n");
     struct timespec current_time_val;
     double current_realtime;
     int S1Cnt=0;
@@ -224,6 +225,7 @@ void *Service_1(void *threadp)
     double service1_totaltime = 0;
     double service1_jitter, service1_refjitter, service1_starttime_prev = 0;
     double service1_totaljitter = 0;
+    
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
@@ -237,6 +239,7 @@ void *Service_1(void *threadp)
         service1_starttime = time_ms();
         //printf("\nService 1 started at %lf ms\n",service1_starttime);
         syslog(LOG_INFO,"Service 1 started at %lf ms\n",service1_starttime);
+        printf("\nIn Service 1 %d\n", S1Cnt);
         mainloop();
         service1_endtime = time_ms();
         //printf("\nService 1 ended at %lf ms\n",service1_endtime);
@@ -259,31 +262,30 @@ void *Service_1(void *threadp)
             service1_totaljitter += service1_jitter;
             //printf("\nService 1 total jitter = %lf ms\n",service1_totaljitter);
         }
-                
+        
         S1Cnt++;
         for(int i=0;i<921600;i++)
         {
             arr_img[j % 60][i] = bigbuffer[i];
         }
         
-        
-        syslog(LOG_INFO,"S1Cnt = %d",S1Cnt);
+    
     }
     
-     printf("\n*********************SUMMARY*********************\n");
+    printf("\n*********************SUMMARY*********************\n");
        service1_averagetime = (service1_totaltime/frame_count);
     printf("\nService 1 Average Execution Time %lf ms\n",service1_averagetime);
     printf("\nService 1 WCET = %lf ms",service1_wcet);
     service1_averagejitter = service1_totaljitter/frame_count;
     printf("\nService 1 Average Jitter %lf ms\n",service1_averagejitter);
-    printf("\n*************************************************\n");
-   
+    printf("\n*************************************************\n");  
     
     pthread_exit((void *)0);
 }
 
 void *Service_2(void *threadp)
 {
+    printf("\nIn Service 1 outside\n");
     struct timespec current_time_val;
     double current_realtime;
     int S2Cnt=0;
@@ -299,24 +301,19 @@ void *Service_2(void *threadp)
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
     syslog(LOG_CRIT, "S2 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
 
-    while(!abortS2)
+    while(S2Cnt < (frame_count+1))
     {
         sem_wait(&semS2);
-        
+        printf("\nIn Service 2 %d\n",S2Cnt);
         service2_starttime_prev = service2_starttime;
         //printf("\nService 2 previously started at %lf ms\n",service2_starttime_prev);
 
         service2_starttime = time_ms();
         //printf("\nService 2 started at %lf ms\n",service2_starttime);
         syslog(LOG_INFO,"Service 2 started at %lf ms\n",service2_starttime);
-        if(S2Cnt != 0) 
-        {
+            
+            dump_ppm((arr_img + ((S2Cnt) % 60)), g_size, framecnt, &frame_time);
             framecnt++;
-            //dump_ppm((arr_img + ((S2Cnt) % 60)), g_size, framecnt, &frame_time);
-            dump_ppm(bigbuffer, g_size, framecnt, &frame_time);
-            printf("\nImage %d dumped!\t",framecnt);
-                    dump_flag = 1;
-        }
         service2_endtime = time_ms();
         //printf("\nService 2 ended at %lf ms\n",service2_endtime);
         syslog(LOG_INFO,"Service 2 ended at %lf ms\n",service2_endtime);
@@ -338,6 +335,7 @@ void *Service_2(void *threadp)
             //printf("\nService 2 each jitter = %lf ms\n",service2_jitter);
             //printf("\nService 2 total jitter = %lf ms\n",service2_totaljitter);
         }
+        
         S2Cnt++;
         syslog(LOG_INFO,"S2Cnt = %d",S2Cnt);
         
@@ -348,6 +346,7 @@ void *Service_2(void *threadp)
         }
         
     }
+    
     printf("\n*********************SUMMARY*********************\n");
       service2_averagetime = (service2_totaltime/frame_count);
     printf("\nService 2 Average Execution Time %lf ms\n",service2_averagetime);
@@ -355,8 +354,7 @@ void *Service_2(void *threadp)
     service2_averagejitter = service2_totaljitter/frame_count;
     printf("\nService 2 Average Jitter %lf ms\n",service2_averagejitter);
     printf("\n*************************************************\n");
-
-    
+      
     pthread_exit((void *)0);
 }
 
@@ -465,6 +463,7 @@ void *Service_3(void *threadp)
 
 void *Sequencer(void *threadp)
 {
+    int delay_cnt, rc;
     struct timeval current_time_val;
     struct timespec delay_time = {1,0}; // delay for 33.33 msec, 30 Hz
     //struct timespec delay_time = {0,100000000};
@@ -473,15 +472,15 @@ void *Sequencer(void *threadp)
     double residual;
     double sequence_jitter, sequence_refjitter, sequence_starttime_prev = 0;
     double sequence_totaljitter = 0;
-    int rc, delay_cnt=0;
-    int seqCnt=0;
-    threadParams_t *threadParams = (threadParams_t *)threadp;
-
     double sequence_starttime = 0;
     double sequence_endtime = 0;
     double sequence_time;
     double sequence_wcet = 0;
     double sequence_totaltime = 0;
+    int seqCnt=0;
+    threadParams_t *threadParams = (threadParams_t *)threadp;
+
+ 
 
     gettimeofday(&current_time_val, (struct timezone *)0);
     syslog(LOG_CRIT, "Sequencer thread @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
@@ -513,6 +512,7 @@ void *Sequencer(void *threadp)
            
         } while((residual > 0.0) && (delay_cnt < 100));
 
+       printf("\nIn Sequencer %d\n", seqCnt);
         if(seqCnt == 0) sequence_refjitter = time_ms();
        
         //gettimeofday(&current_time_val, (struct timezone *)0);
@@ -522,19 +522,17 @@ void *Sequencer(void *threadp)
         //printf("\nSequence previously started at %lf ms\n",sequence_starttime_prev);
         sequence_starttime = time_ms();
         //printf("\nSequence started at %lf ms\n",sequence_starttime);
-
         if(delay_cnt > 1) printf("Sequencer looping delay %d\n", delay_cnt);
-
+        // Servcie_1 = RT_MAX-1	@ 1 Hz
+        if((seqCnt % 1) == 0) 
+        {
+            sem_post(&semS1);
+        }
         // Release each service at a sub-rate of the generic sequencer rate
         // Service_2 = RT_MAX-2	@ 1 Hz
         if((seqCnt % 1) == 0)
         {
             sem_post(&semS2);
-        }
-        // Servcie_1 = RT_MAX-1	@ 1 Hz
-        if((seqCnt % 1) == 0) 
-        {
-            sem_post(&semS1);
         }
         
         //printf("\nseqCnt = %d\n",seqCnt);
@@ -556,6 +554,7 @@ void *Sequencer(void *threadp)
             sequence_totaljitter += sequence_jitter;
             //printf("\nSequence total jitter = %lf ms\n",sequence_totaljitter);
         }
+
         seqCnt++;
         
         //printf("\nseqCnt = %d\n",seqCnt);
@@ -563,16 +562,16 @@ void *Sequencer(void *threadp)
         //gettimeofday(&current_time_val, (struct timezone *)0);
         //syslog(LOG_CRIT, "Sequencer release all sub-services @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
 
-    } while(!abortTest && (seqCnt <= frame_count));
+    } while(!abortTest && (seqCnt <= (frame_count+1)));
 
     sem_post(&semS1); 
     sem_post(&semS2); 
-    sem_post(&semS3);
+    //sem_post(&semS3);
     
     abortS1=TRUE; 
     abortS2=TRUE;
     abortS3=TRUE;
-     printf("\n*********************SUMMARY*********************\n");
+    printf("\n*********************SUMMARY*********************\n");
        sequence_averagetime = (sequence_totaltime/frame_count);
     printf("\nSequence Average Execution Time %lf ms\n",sequence_averagetime);
     printf("\nSequence WCET = %lf ms",sequence_wcet);
@@ -1246,7 +1245,7 @@ int main(int argc, char **argv)
     
     if (sem_init (&semS1, 0, 0)) { printf ("Failed to initialize S1 semaphore\n"); exit (-1); }
     if (sem_init (&semS2, 0, 0)) { printf ("Failed to initialize S2 semaphore\n"); exit (-1); }
-    if (sem_init (&semS2, 0, 0)) { printf ("Failed to initialize S2 semaphore\n"); exit (-1); }
+    if (sem_init (&semS3, 0, 0)) { printf ("Failed to initialize S2 semaphore\n"); exit (-1); }
     
     mainpid=getpid();
 
