@@ -68,7 +68,7 @@
 #define SHARPEN
 #define K 4.0
 #define PORT 8080
-#define RIGHT_FRAME 10
+#define RIGHT_FRAME 30
 
 //definition of threads
 typedef struct
@@ -454,8 +454,8 @@ void *Sequencer(void *threadp)
 {
     int delay_cnt, rc;
     struct timeval current_time_val;
-    struct timespec delay_time = {1,0}; // delay for 33.33 msec, 30 Hz
-    //struct timespec delay_time = {0,100000000};
+    //struct timespec delay_time = {1,0}; // delay for 33.33 msec, 30 Hz
+    struct timespec delay_time = {0,100000000};
     struct timespec remaining_time;
     double current_time;
     double residual;
