@@ -66,7 +66,7 @@
 #define K 4.0
 #define PORT 8080
 #define RIGHT_FRAME 30
-//#define HERTZ 1
+#define HERTZ 1
 #define str_hres "640"
 #define str_vres "480"
 
@@ -225,12 +225,12 @@ void *Service_1(void *threadp)
         j++;
         service1_starttime_prev = service1_starttime;
         service1_starttime = time_ms();
-        syslog(LOG_INFO,"Service 1 started at %lf ms\n",service1_starttime);
+        syslog(LOG_INFO,"Service 1 started at %lf ms",service1_starttime);
     
         mainloop();
         
         service1_endtime = time_ms();
-        syslog(LOG_INFO,"Service 1 ended at %lf ms\n",service1_endtime);
+        syslog(LOG_INFO,"Service 1 ended at %lf ms",service1_endtime);
         
         service1_time = service1_endtime - service1_starttime;
         printf("\nImage captured!\tTime taken: %lf ms\n",service1_time);
@@ -295,17 +295,18 @@ void *Service_2(void *threadp)
         service2_starttime_prev = service2_starttime;
 
         service2_starttime = time_ms();
-        syslog(LOG_INFO,"Service 2 started at %lf ms\n",service2_starttime);
+        syslog(LOG_INFO,"Service 2 started at %lf ms",service2_starttime);
         if(S2Cnt >= RIGHT_FRAME)
         {
             dump_ppm((arr_img + ((S2Cnt) % 60)), g_size, framecnt, &frame_time);
             framecnt++;
+            dump_flag = 1;
         }
         service2_endtime = time_ms();
-        syslog(LOG_INFO,"Service 2 ended at %lf ms\n",service2_endtime);
+        syslog(LOG_INFO,"Service 2 ended at %lf ms",service2_endtime);
         
         service2_time = service2_endtime - service2_starttime;
-        printf("\nImage dumped\tTime taken:  %lf ms\n",service2_time);
+        printf("\nImage dumped!\tTime taken:  %lf ms\n",service2_time);
         service2_totaltime += service2_time;        
         
         if(service2_wcet < service2_time) service2_wcet = service2_time;
@@ -319,16 +320,15 @@ void *Service_2(void *threadp)
         S2Cnt++;
         syslog(LOG_INFO,"S2Cnt = %d",S2Cnt);
         
-        if(socket_enable == 1)
+        if((socket_enable == 1) && (dump_flag == 1))
         {   
-            printf("Sem_POST 33333333333333");
             sem_post(&semS3);
         }
         
     }
     
     printf("\n*********************SUMMARY*********************\n");
-      service2_averagetime = (service2_totaltime/frame_count);
+    service2_averagetime = (service2_totaltime/frame_count);
     printf("\nService 2 Average Execution Time %lf ms\n",service2_averagetime);
     printf("\nService 2 WCET = %lf ms",service2_wcet);
     service2_averagejitter = service2_totaljitter/frame_count;
@@ -356,7 +356,7 @@ void *Service_3(void *threadp)
     double service3_totaljitter = 0;
     double service3_wcet = 0;
     double service3_totaltime = 0;
-    int image_number = 1;
+    int image_number = 0;
     int image_size;
     int send_success;
     
@@ -365,36 +365,27 @@ void *Service_3(void *threadp)
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
     syslog(LOG_CRIT, "S3 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
 
-    while(S3Cnt<=frame_count)
+    while(!abortS3)
     {
         sem_wait(&semS3);
-        printf("\nS3Cnt = %d\n",S3Cnt);
-        printf("\nNum = %d",image_number);
+        syslog(LOG_INFO,"S3Cnt = %d\n",S3Cnt);
+        syslog(LOG_INFO,"Num = %d",image_number);
         service3_starttime_prev = service3_starttime;
-        printf("\nService 3 previously started at %lf ms\n",service3_starttime_prev);
         service3_starttime = time_ms();
-        printf("\nService 3 started at %lf ms\n",service3_starttime);
-        syslog(LOG_INFO,"Service 3 started at %lf ms\n",service3_starttime);
-        printf("\n1\n");
-        
-        printf("\n DUMP FLAG!!! = %d\n",dump_flag);
+        syslog(LOG_INFO,"Service 3 started at %lf ms",service3_starttime);
+                
         if(dump_flag == 1)
         {
             dump_flag = 0;
             snprintf(&ppm_dumpname[4], 9, "%08d", image_number);
             strncat(&ppm_dumpname[12], ".ppm", 5);
-            printf("\n2\n");
             f = fopen(ppm_dumpname,"rb");
-            printf("\n3\n");
             fseek(f,0,SEEK_END);
-            printf("\n4\n");
             image_size = ftell(f);
-            printf("\n5\n");
             fseek(f,0,SEEK_SET);
-            printf("\n6\n");
             
             image_size = fread(client_buf,1,sizeof(client_buf),f);
-            send_success = send(sockfd,(char *)&client_buf,size,0);
+            send_success = send(sockfd,(char *)&client_buf,image_size,0);
 
             if(send_success == -1)
             {
@@ -411,25 +402,19 @@ void *Service_3(void *threadp)
         }
        
         service3_endtime = time_ms();
-        //printf("\nService 2 ended at %lf ms\n",service2_endtime);
+        syslog(LOG_INFO,"Service 3 ended at %lf ms",service3_endtime);
         
         service3_time = service3_endtime - service3_starttime;
-        //printf("Time taken:  %lf ms\n",service3_time);
+        printf("\nImage sent!\tTime taken:  %lf ms\n",service3_time);
         service3_totaltime += service3_time;
-        //printf("\nService 3 total time %lf ms\n",service3_totaltime);
         
         
         if(service3_wcet < service3_time) service3_wcet = service3_time;
-        //printf("\nService 3 WCET = %lf ms",service3_wcet);
         
-        //printf("\nS3Cnt = %d\n",S3Cnt);
         if(S3Cnt != 0) 
         {
             service3_jitter = (service3_starttime_prev + 1000) - service3_starttime; //1Hz = 1000ms
-            
             service3_totaljitter += service3_jitter;
-            printf("\nService 3 each jitter = %lf ms\n",service3_jitter);
-            //printf("\nService 2 total jitter = %lf ms\n",service2_totaljitter);
         }
          S3Cnt++;
         
@@ -519,7 +504,7 @@ void *Sequencer(void *threadp)
 
         sequence_starttime_prev = sequence_starttime;        
         sequence_starttime = time_ms();
-        syslog(LOG_INFO,"\nSequence started at %lf ms\n",sequence_starttime);
+        syslog(LOG_INFO,"Sequence started at %lf ms",sequence_starttime);
         
         if(delay_cnt > 1) printf("Sequencer looping delay %d\n", delay_cnt);
         // Servcie_1 = RT_MAX-1	@ 1 Hz
@@ -535,7 +520,7 @@ void *Sequencer(void *threadp)
         }
         
         sequence_endtime = time_ms();
-        syslog(LOG_INFO,"\nSequence ended at %lf ms\n",sequence_endtime);
+        syslog(LOG_INFO,"Sequence ended at %lf ms",sequence_endtime);
         
         sequence_time = sequence_endtime - sequence_starttime;
         printf("\nSequencer executed!\tTime taken:  %lf ms\n",sequence_time);
@@ -551,6 +536,7 @@ void *Sequencer(void *threadp)
         
 
         seqCnt++;
+        syslog(LOG_INFO,"SeqCnt = %d", seqCnt);
         
     } while(!abortTest && (seqCnt <= (frame_count + RIGHT_FRAME)));
 
@@ -561,7 +547,7 @@ void *Sequencer(void *threadp)
     abortS2=TRUE;
     abortS3=TRUE;
     printf("\n*********************SUMMARY*********************\n");
-       sequence_averagetime = (sequence_totaltime/frame_count);
+    sequence_averagetime = (sequence_totaltime/frame_count);
     printf("\nSequence Average Execution Time %lf ms\n",sequence_averagetime);
     printf("\nSequence WCET = %lf ms",sequence_wcet);
     sequence_averagejitter = sequence_totaljitter/frame_count;
