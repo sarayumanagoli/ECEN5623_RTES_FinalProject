@@ -66,7 +66,7 @@
 #define K 4.0
 #define PORT 8080
 #define RIGHT_FRAME 30
-#define HERTZ 1
+//#define HERTZ 1
 #define str_hres "640"
 #define str_vres "480"
 
