@@ -1,11 +1,11 @@
 /* 
  * Edited by: Sarayu Managoli
  * Author: Dr. Sam Siewert
- * Overview: Solution for Question 5 Part B
+ * Overview: This file contains the source code for the final project in the course ECEN5623 Real Time Operating Systems
  * Board Used: Raspberry Pi 3+ 
  * Code Leverage: Sharpen transformation - http://ecee.colorado.edu/~ecen5623/ecen/ex/Linux/computer-vision/sharpen-psf/sharpen.c
  * 				  Capture - http://ecee.colorado.edu/~ecen5623/ecen/ex/Linux/computer-vision/simple-capture/capture.c
- *                Delta T - http://ecee.colorado.edu/~ecen5623/ecen/ex/Linux/code/RT-Clock/posix_clock.c
+ *                Scheduler - http://ecee.colorado.edu/~ecen5623/ecen/ex/Linux/code/sequencer_generic/seqgen.c
  */
 
 /*
@@ -22,14 +22,13 @@
  *      This program is provided with the V4L2 API
  * see http://linuxtv.org/docs.php for more information
  */
+ 
 #define _GNU_SOURCE 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-
 #include <getopt.h>             /* getopt_long() */
-
 #include <fcntl.h>              /* low-level i/o */
 #include <unistd.h>
 #include <errno.h>
@@ -46,7 +45,6 @@
 #include <sched.h>
 #include <sys/socket.h> 
 #include <arpa/inet.h> 
-
 #include <sys/sysinfo.h>
 #include <linux/videodev2.h>
 #include <sched.h>
@@ -62,13 +60,15 @@
 #define USEC_PER_MSEC (1000)
 #define NANOSEC_PER_MSEC (1000000)
 #define NANOSEC_PER_SEC (1000000000)
-//#define NUM_THREADS (4)
 #define TRUE (1)
 #define FALSE (0)
 #define SHARPEN
 #define K 4.0
 #define PORT 8080
 #define RIGHT_FRAME 30
+//#define HERTZ 1
+#define str_hres "640"
+#define str_vres "480"
 
 //definition of threads
 typedef struct
@@ -104,15 +104,13 @@ double start_realtime;
 sem_t semS1,semS2,semS3;
 int g_size;
 struct utsname platform;
-
 struct sockaddr_in server_address;
 int sockfd;
 int image_size;
-static FILE *fptr;
+static FILE *f;
 unsigned char client_buf[921600];
-int count = 0;
+int send_count = 0;
 int socket_enable;
-
 
 static char            *dev_name;
 //static enum io_method   io = IO_METHOD_USERPTR;
@@ -136,12 +134,8 @@ pthread_attr_t main_sched_attr;
 int rt_max_prio, rt_min_prio, min;
 struct sched_param main_param;
 
-#define str_hres "640"
-#define str_vres "480"
-
 static int HRES_STR;
 static int VRES_STR;
-
 
 static char ppm_header[]="P6\n#Time: 9999999999 sec 9999999999 msec \n#Platform: 9999999999999 9999999\n"str_hres" "str_vres"\n255\n";
 char ppm_dumpname[]="test00000000.ppm";
@@ -176,7 +170,7 @@ double time_ms()
 static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec *time)
 {
     int written, i, total, dumpfd;
-    
+    syslog(LOG_INFO,"In PPM Dump");
     snprintf(&ppm_dumpname[4], 9, "%08d", tag);
     strncat(&ppm_dumpname[12], ".ppm", 5);
     dumpfd = open(ppm_dumpname, O_WRONLY | O_NONBLOCK | O_CREAT, 00666);
@@ -185,22 +179,18 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
 		(int)time->tv_sec, (int)((time->tv_nsec)/1000000), platform.nodename, platform.machine);
       
     written=write(dumpfd, ppm_header, sizeof(ppm_header));
-
     total=0;
-
     do
     {
         written=write(dumpfd, p, size);
         total+=written;
     } while(total < size);
-
-    close(dumpfd);
     
+    close(dumpfd);
 }
 
 void *Service_1(void *threadp)
 {
-    printf("\nIn Service 1 outside\n");
     struct timespec current_time_val;
     double current_realtime;
     int S1Cnt=0;
@@ -222,51 +212,44 @@ void *Service_1(void *threadp)
         sem_wait(&semS1);
         j++;
         service1_starttime_prev = service1_starttime;
-        //printf("\nService 1 previously started at %lf ms\n",service1_starttime_prev);
         service1_starttime = time_ms();
-        //printf("\nService 1 started at %lf ms\n",service1_starttime);
         syslog(LOG_INFO,"Service 1 started at %lf ms\n",service1_starttime);
-        printf("\nIn Service 1 %d\n", S1Cnt);
+    
         mainloop();
+        
         service1_endtime = time_ms();
-        //printf("\nService 1 ended at %lf ms\n",service1_endtime);
         syslog(LOG_INFO,"Service 1 ended at %lf ms\n",service1_endtime);
         
         service1_time = service1_endtime - service1_starttime;
         printf("\nImage captured!\tTime taken: %lf ms\n",service1_time);
         service1_totaltime += service1_time;
-        //printf("\nService 1 total time %lf ms\n",service1_totaltime);
         
         if(S1Cnt!=0)
         if(service1_wcet < service1_time) service1_wcet = service1_time;
-        //printf("\nService 1 WCET = %lf ms",service1_wcet);
-        //printf("\nS1Cnt = %d\n",S1Cnt);
         
         if(S1Cnt != 0)
         {
-            service1_jitter = (service1_starttime_prev + 1000) - service1_starttime; //1Hz = 1000ms
-            //printf("\nService 1 each jitter = %lf ms\n",service1_jitter);
+            service1_jitter = (service1_starttime_prev + 1000) - service1_starttime;
             service1_totaljitter += service1_jitter;
-            //printf("\nService 1 total jitter = %lf ms\n",service1_totaljitter);
         }
         
         S1Cnt++;
+        syslog(LOG_INFO,"S1Cnt = %d",S1Cnt);
+        
         for(int i=0;i<921600;i++)
         {
             arr_img[j % 60][i] = bigbuffer[i];
         }
-        
-    
     }
     
     printf("\n*********************SUMMARY*********************\n");
-       service1_averagetime = (service1_totaltime/frame_count);
+    service1_averagetime = (service1_totaltime/frame_count);
     printf("\nService 1 Average Execution Time %lf ms\n",service1_averagetime);
     printf("\nService 1 WCET = %lf ms",service1_wcet);
     service1_averagejitter = service1_totaljitter/frame_count;
     printf("\nService 1 Average Jitter %lf ms\n",service1_averagejitter);
     printf("\n*************************************************\n");  
-    
+
     pthread_exit((void *)0);
 }
 
@@ -291,12 +274,9 @@ void *Service_2(void *threadp)
     while(!abortS2)
     {
         sem_wait(&semS2);
-        printf("\nIn Service 2 %d\n",S2Cnt);
         service2_starttime_prev = service2_starttime;
-        //printf("\nService 2 previously started at %lf ms\n",service2_starttime_prev);
 
         service2_starttime = time_ms();
-        //printf("\nService 2 started at %lf ms\n",service2_starttime);
         syslog(LOG_INFO,"Service 2 started at %lf ms\n",service2_starttime);
         if(S2Cnt >= RIGHT_FRAME)
         {
@@ -304,25 +284,18 @@ void *Service_2(void *threadp)
             framecnt++;
         }
         service2_endtime = time_ms();
-        //printf("\nService 2 ended at %lf ms\n",service2_endtime);
         syslog(LOG_INFO,"Service 2 ended at %lf ms\n",service2_endtime);
         
         service2_time = service2_endtime - service2_starttime;
-        printf("Time taken:  %lf ms\n",service2_time);
-        service2_totaltime += service2_time;
-        //printf("\nService 2 total time %lf ms\n",service2_totaltime);
-        
+        printf("\nImage dumped\tTime taken:  %lf ms\n",service2_time);
+        service2_totaltime += service2_time;        
         
         if(service2_wcet < service2_time) service2_wcet = service2_time;
-        //printf("\nService 2 WCET = %lf ms",service2_wcet);
         
-        //printf("\nS2Cnt = %d\n",S2Cnt);
         if(S2Cnt != 0) 
         {
-            service2_jitter = (service2_starttime_prev + 1000) - service2_starttime; //1Hz = 1000ms
+            service2_jitter = (service2_starttime_prev + 1000) - service2_starttime;
             service2_totaljitter += service2_jitter;
-            //printf("\nService 2 each jitter = %lf ms\n",service2_jitter);
-            //printf("\nService 2 total jitter = %lf ms\n",service2_totaljitter);
         }
         
         S2Cnt++;
@@ -360,6 +333,8 @@ void *Service_3(void *threadp)
     double service3_wcet = 0;
     double service3_totaltime = 0;
     int image_number = 1;
+    int image_size;
+    int send_success;
     
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
@@ -385,29 +360,29 @@ void *Service_3(void *threadp)
             snprintf(&ppm_dumpname[4], 9, "%08d", image_number);
             strncat(&ppm_dumpname[12], ".ppm", 5);
             printf("\n2\n");
-            fptr = fopen(ppm_dumpname,"r");
+            f = fopen(ppm_dumpname,"rb");
             printf("\n3\n");
-            fseek(fptr,0,SEEK_END);
+            fseek(f,0,SEEK_END);
             printf("\n4\n");
-            image_size = ftell(fptr);
+            image_size = ftell(f);
             printf("\n5\n");
-            fseek(fptr,0,SEEK_SET);
+            fseek(f,0,SEEK_SET);
             printf("\n6\n");
-            int size = fread(client_buf,1,sizeof(client_buf),fptr);
+            
+            image_size = fread(client_buf,1,sizeof(client_buf),f);
+            send_success = send(sockfd,(char *)&client_buf,size,0);
 
-            int rc = send(sockfd,(char *)&client_buf,size,0);
-
-            if(rc == -1)
+            if(send_success == -1)
             {
                 syslog(LOG_INFO,"Unable to send socket");
             }
             else
             {
-                syslog(LOG_INFO,"Socket Send %d SUCCESSFUL = %d bytes",count,rc);
+                syslog(LOG_INFO,"Socket Send %d SUCCESSFUL = %d bytes",send_count,send_success);
                 printf("\nSent sockets successfully\n");
-                count++;
+                send_count++;
             }
-            fclose(fptr);
+            fclose(f);
             image_number++;
         }
        
@@ -454,8 +429,11 @@ void *Sequencer(void *threadp)
 {
     int delay_cnt, rc;
     struct timeval current_time_val;
-    //struct timespec delay_time = {1,0}; // delay for 33.33 msec, 30 Hz
+#ifdef HERTZ
+    struct timespec delay_time = {1,0}; // delay for 33.33 msec, 30 Hz
+#else
     struct timespec delay_time = {0,100000000};
+#endif
     struct timespec remaining_time;
     double current_time;
     double residual;
@@ -501,16 +479,16 @@ void *Sequencer(void *threadp)
            
         } while((residual > 0.0) && (delay_cnt < 100));
 
-       printf("\nIn Sequencer %d\n", seqCnt);
+    
         if(seqCnt == 0) sequence_refjitter = time_ms();
        
         //gettimeofday(&current_time_val, (struct timezone *)0);
        // syslog(LOG_CRIT, "Sequencer cycle %llu @ sec=%d, msec=%d\n", seqCnt, (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
 
         sequence_starttime_prev = sequence_starttime;        
-        //printf("\nSequence previously started at %lf ms\n",sequence_starttime_prev);
         sequence_starttime = time_ms();
-        //printf("\nSequence started at %lf ms\n",sequence_starttime);
+        syslog(LOG_INFO,"\nSequence started at %lf ms\n",sequence_starttime);
+        
         if(delay_cnt > 1) printf("Sequencer looping delay %d\n", delay_cnt);
         // Servcie_1 = RT_MAX-1	@ 1 Hz
         if((seqCnt % 1) == 0) 
@@ -524,39 +502,28 @@ void *Sequencer(void *threadp)
             sem_post(&semS2);
         }
         
-        //printf("\nseqCnt = %d\n",seqCnt);
         sequence_endtime = time_ms();
-        //printf("\nSequence ended at %lf ms\n",sequence_endtime);
+        syslog(LOG_INFO,"\nSequence ended at %lf ms\n",sequence_endtime);
         
         sequence_time = sequence_endtime - sequence_starttime;
         printf("\nSequencer executed!\tTime taken:  %lf ms\n",sequence_time);
         sequence_totaltime += sequence_time;
-        //printf("\nSequence total time %lf ms\n",sequence_totaltime);
         
         if(sequence_wcet < sequence_time) sequence_wcet = sequence_time;
-        //printf("\nSequence WCET = %lf ms",sequence_wcet);
         
         if(seqCnt != 0)
         {
-            sequence_jitter = (sequence_starttime_prev + 1000) - sequence_starttime; //1Hz = 1000ms
-            // printf("\nSequence each jitter = %lf ms\n",sequence_jitter);
+            sequence_jitter = (sequence_starttime_prev + 1000) - sequence_starttime; 
             sequence_totaljitter += sequence_jitter;
-            //printf("\nSequence total jitter = %lf ms\n",sequence_totaljitter);
         }
         
 
         seqCnt++;
         
-        //printf("\nseqCnt = %d\n",seqCnt);
-        
-        //gettimeofday(&current_time_val, (struct timezone *)0);
-        //syslog(LOG_CRIT, "Sequencer release all sub-services @ sec=%d, msec=%d\n", (int)(current_time_val.tv_sec-start_time_val.tv_sec), (int)current_time_val.tv_usec/USEC_PER_MSEC);
-
     } while(!abortTest && (seqCnt <= (frame_count + RIGHT_FRAME)));
 
     sem_post(&semS1); 
     sem_post(&semS2); 
-    //sem_post(&semS3);
     
     abortS1=TRUE; 
     abortS2=TRUE;
@@ -805,7 +772,6 @@ static void start_capturing(void)
         case IO_METHOD_MMAP:
                 for (i = 0; i < n_buffers; ++i) 
                 {
-                        printf("allocated buffer %d\n", i);
                         struct v4l2_buffer buf;
 
                         CLEAR(buf);
@@ -1216,18 +1182,25 @@ int main(int argc, char **argv)
     VRES_STR = atoi(argv[2]);
     frame_count = atoi(argv[3]);
     socket_enable = atoi(argv[4]);
-    printf("Resolution requested is:\nHorizontal = %d\nVertical = %d\n",HRES_STR,VRES_STR);
+    
+    printf("\nResolution requested is:\nHorizontal = %d\nVertical = %d\n",HRES_STR,VRES_STR);
     strncpy(hres_string,argv[1],sizeof(hres_string));
     strncpy(vres_string,argv[2],sizeof(vres_string));
     
     if(socket_enable == 1)
-       num_threads = 4;
+    {
+        printf("\nYou have enabled the socket!\n");
+        num_threads = 4;
+    }
     else
-       num_threads = 3;
-       
+    {
+        printf("\nYou have disabled the socket!\n");
+        num_threads = 3;
+    }
+        
     pthread_t threads[num_threads];
     
-    syslog(LOG_INFO,"***********PROGRAM BEGINS************");
+    syslog(LOG_INFO,"*****************PROGRAM BEGINS*****************");
 
     int idx,c;
     c = getopt_long(argc, argv, short_options, long_options, &idx);
@@ -1267,7 +1240,6 @@ int main(int argc, char **argv)
       rc=pthread_attr_setinheritsched(&rt_sched_attr[i], PTHREAD_EXPLICIT_SCHED);
       rc=pthread_attr_setschedpolicy(&rt_sched_attr[i], SCHED_FIFO);
       pthread_attr_setschedparam(&rt_sched_attr[i], &rt_param[i]);
-
       threadParams[i].threadIdx=i;
     }
    
@@ -1284,16 +1256,16 @@ int main(int argc, char **argv)
         server_address.sin_family = AF_INET;
         server_address.sin_port = htons(PORT);
 
-        // Convert IPv4 and IPv6 addresses from text to binary form
+       
         if(inet_pton(AF_INET, "10.0.0.196", &server_address.sin_addr)<=0)
         {
-            printf("\nInvalid address/ Address not supported \n");
+            syslog(LOG_ERR,"\nInvalid address/ Address not supported \n");
             return -1;
         }
 
         if (connect(sockfd, (struct sockaddr *)&server_address, sizeof(server_address)) < 0)
         {
-            printf("\nConnection Failed \n");
+            syslog(LOG_ERR,"\nConnection Failed \n");
             return -1;
         }
     }
