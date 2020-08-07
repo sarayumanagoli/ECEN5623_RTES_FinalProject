@@ -66,7 +66,7 @@
 #define K 4.0
 #define PORT 8080
 #define RIGHT_FRAME 30
-//#define HERTZ 1
+#define HERTZ 1
 #define str_hres "640"
 #define str_vres "480"
 
@@ -113,8 +113,6 @@ int send_count = 0;
 int socket_enable;
 
 static char            *dev_name;
-//static enum io_method   io = IO_METHOD_USERPTR;
-//static enum io_method   io = IO_METHOD_READ;
 static enum io_method   io = IO_METHOD_MMAP;
 static int              fd = -1;
 struct buffer          *buffers;
@@ -159,6 +157,11 @@ double realtime(struct timespec *tsptr)
     return ((double)(tsptr->tv_sec) + (((double)tsptr->tv_nsec)/1000000000.0));
 }
 
+/* @Function name : time_ms
+ * @Description : Timestamp generated in milliseconds
+ * @Return value : double
+ */
+ 
 double time_ms()
 {
     struct timespec timing = {0,0};
@@ -166,7 +169,11 @@ double time_ms()
     return(((double)timing.tv_sec*(double)1000) + ((double)timing.tv_nsec/(double)1000000));
 }
 
-//PPM image format
+/* @Function name : dump_ppm
+ * @Description : Generates PPM files from the buffer input
+ * @Return value : void
+ */
+
 static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec *time)
 {
     int written, i, total, dumpfd;
@@ -188,6 +195,11 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
     
     close(dumpfd);
 }
+
+/* @Function name : Service_1
+ * @Description : This service captures and processes raw images at 1 or 10 Hz
+ * @Return value : void
+ */
 
 void *Service_1(void *threadp)
 {
@@ -252,6 +264,12 @@ void *Service_1(void *threadp)
 
     pthread_exit((void *)0);
 }
+
+/* @Function name : Service_2
+ * @Description : This service calls dump_ppm() to generate images at 1 or 10 Hz
+ * @Return value : void
+ */
+
 
 void *Service_2(void *threadp)
 {
@@ -319,6 +337,12 @@ void *Service_2(void *threadp)
       
     pthread_exit((void *)0);
 }
+
+/* @Function name : Service_3
+ * @Description : This service sends the generated PPM files to the server system over TCP connection.
+ *                This is called if socket_enable is true.
+ * @Return value : void
+ */
 
 void *Service_3(void *threadp)
 {
@@ -424,6 +448,14 @@ void *Service_3(void *threadp)
     
     pthread_exit((void *)0);
 }
+
+
+/* @Function name : Sequencer
+ * @Description : This function is reponsible for calling each of the services
+ *                at the agreed upon frequency.
+ * @Return value : void
+ */
+
 
 void *Sequencer(void *threadp)
 {
@@ -540,7 +572,11 @@ void *Sequencer(void *threadp)
     pthread_exit((void *)0);
 }
 
-
+/* @Function name : print_scheduler
+ * @Description : This function prints the sceduling policy adhered to by the program.
+ * @Return value : void
+ */
+ 
 void print_scheduler(void)
 {
    int schedType;
@@ -624,6 +660,12 @@ void yuv2rgb(int y, int u, int v, unsigned char *r, unsigned char *g, unsigned c
    *b = b1 ;
 }
 
+
+/* @Function name : process_image
+ * @Description : Processes the image from YUV to RGB format.
+ * @Return value : void
+ */
+ 
 static void process_image(const void *p, int size)
 {
     int i, k, newsize=0;
@@ -649,7 +691,11 @@ static void process_image(const void *p, int size)
     fflush(stdout);
 }
 
-//Each frame is read
+/* @Function name : read_frame
+ * @Description : Allocates memory and captures the image in its raw state.
+ * @Return value : int
+ */
+ 
 static int read_frame(void)
 {
     struct v4l2_buffer buf;
@@ -690,7 +736,11 @@ static int read_frame(void)
 
 }
 
-
+/* @Function name : mainloop
+ * @Description : Sets the read delay and each frame is read
+ * @Return value : void
+ */
+ 
 static void mainloop(void)
 {
     unsigned int count;
@@ -737,7 +787,11 @@ static void mainloop(void)
 }
 
 
-//Stop frames from being read
+/* @Function name : stop_capturing
+ * @Description : Stop frames from being read.
+ * @Return value : void
+ */
+
 static void stop_capturing(void)
 {
         enum v4l2_buf_type type;
@@ -756,7 +810,11 @@ static void stop_capturing(void)
         }
 }
 
-//Start reading from video0 device
+/* @Function name : start_capturing
+ * @Description : Start reading from video0 device.
+ * @Return value : void
+ */
+ 
 static void start_capturing(void)
 {
         unsigned int i;
@@ -809,7 +867,11 @@ static void start_capturing(void)
 }
 
 
-//initialise reading from a video0 dev
+/* @Function name : init_read
+ * @Description : Initialises reading from a video0 dev.
+ * @Return value : void
+ */
+ 
 static void init_read(unsigned int buffer_size)
 {
         buffers = calloc(1, sizeof(*buffers));
@@ -930,8 +992,11 @@ static void init_userp(unsigned int buffer_size)
         }
 }
 
-
-//Initialise video0 device
+/* @Function name : init_device
+ * @Description : Initialises video0 dev.
+ * @Return value : void
+ */
+ 
 static void init_device(void)
 {
     struct v4l2_capability cap;
@@ -1067,6 +1132,10 @@ static void init_device(void)
     }
 }
 
+/* @Function name : uninit_device
+ * @Description : Unitialises video0 dev.
+ * @Return value : void
+ */
 
 static void uninit_device(void)
 {
@@ -1158,6 +1227,11 @@ static void close_device(void)
         fd = -1;
 }
 
+/* @Function name : main
+ * @Description : This function accepts user inputs, allocates scheduling policies, creates threads, 
+ *                initialises semaphores, assigns CPU cores for each of the threads.
+ * @Return value : int
+ */
 
 int main(int argc, char **argv)
 {
