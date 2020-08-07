@@ -103,7 +103,7 @@ struct timespec start_time_val;
 double start_realtime;
 sem_t semS1,semS2,semS3;
 int g_size;
-struct utsname hostname;
+struct utsname platform;
 
 struct sockaddr_in server_address;
 int sockfd;
@@ -143,7 +143,7 @@ static int HRES_STR;
 static int VRES_STR;
 
 
-char ppm_header[100]; //="P6\n#9999999999 sec 9999999999 msec \n"str_hres" "str_vres"\n255\n";
+static char ppm_header[]="P6\n#Time: 9999999999 sec 9999999999 msec \n#Platform: 9999999999999 9999999\n"str_hres" "str_vres"\n255\n";
 char ppm_dumpname[]="test00000000.ppm";
 
 char hres_string[3];
@@ -181,21 +181,9 @@ static void dump_ppm(const void *p, int size, unsigned int tag, struct timespec 
     strncat(&ppm_dumpname[12], ".ppm", 5);
     dumpfd = open(ppm_dumpname, O_WRONLY | O_NONBLOCK | O_CREAT, 00666);
 
-    strncat(&ppm_header[0],"P6\n#",4);
-    snprintf(&ppm_header[4], 11, "%010d", (int)time->tv_sec);
-    strncat(&ppm_header[14], " sec ", 5);
-    snprintf(&ppm_header[19], 11, "%010d", (int)((time->tv_nsec)/1000000));
-    strncat(&ppm_header[29], " msec \n"str_hres" "str_vres"\n255\n", 19);
-   
-    strncat(&ppm_header[48], "#Info: ", 7);
-    strncat(&ppm_header[55], hostname.version , strlen(hostname.version));
-    strncat(&ppm_header[55+strlen(hostname.version)], "\n", 1);
-    //strncat(&ppm_header[49+strlen(hostname.version)], hostname.nodename, strlen(hostname.nodename));
-    //strncat(&ppm_header[49+strlen(hostname.nodename)+strlen(hostname.nodename)], "\n", 1);
-    //strncat(&ppm_header[64+strlen(hostname.nodename)+strlen(hostname.nodename)], hostname.sysname, strlen(hostname.sysname));
-    //strncat(&ppm_header[64+strlen(hostname.machine)+strlen(hostname.nodename)+strlen(hostname.sysname)], "\n", 1);
-    
-    
+    snprintf(&ppm_header[0], 100, "P6\n#Time: %010d sec %010d msec \n#Platform: %s %s\n"str_hres" "str_vres"\n255\n", 
+		(int)time->tv_sec, (int)((time->tv_nsec)/1000000), platform.nodename, platform.machine);
+      
     written=write(dumpfd, ppm_header, sizeof(ppm_header));
 
     total=0;
@@ -1218,7 +1206,7 @@ int main(int argc, char **argv)
     int num_threads;
     
     system("uname -a");
-    uname(&hostname);
+    uname(&platform);
     
 	pthread_attr_t main_attr;
     dev_name = "/dev/video0";
