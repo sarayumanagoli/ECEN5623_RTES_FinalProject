@@ -1,9 +1,11 @@
 /* 
  * Edited by: Sarayu Managoli
  * Author: Dr. Sam Siewert
- * Overview: This file contains the source code for the server end of final project in the course ECEN5623 Real Time Operating Systems
- * Board Used: Raspberry Pi 3+ 
+ * Overview: This file contains the source code for the server end of final project in the course ECEN5623 Real Time Embedded Systems
+ * Board Used:  Raspberry Pi 3B 
  * Code Leverage: Socket - https://www.geeksforgeeks.org/socket-programming-cc/
+ * 				  Sending images over sockets - https://stackoverflow.com/questions/13097375/sending-images-over-sockets-in-c
+ * 				  						https://stackoverflow.com/questions/15445207/sending-image-jpeg-through-socket-in-c-linux
  */
 
 //Header files

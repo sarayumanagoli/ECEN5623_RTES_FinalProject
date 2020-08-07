@@ -16,7 +16,7 @@ all:	main
 
 clean:
 	-rm -f *.o *.d
-	-rm -f Question5_2
+	-rm -f main
 	-rm -f *.ppm
 
 distclean:
@@ -24,6 +24,14 @@ distclean:
 
 main: ${OBJS}
 	$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $@.o $(LIBS)
+	@echo "To run the code, a few arguments have to be provided on the command line"
+	@echo "To generate 1800 frames at a resolution of 640 X 480 with socket disabled,"
+	@echo "type: sudo ./main 640 480 1800 0"
+	@echo "To generate 1800 frames at a resolution of 640 X 480 with socket enabled,"
+	@echo "type: sudo ./main 640 480 1800 1"
+	@echo "The frequency can be changed by defining and undefining the HERTZ macro in main.c"
+
+
 
 depend:
 

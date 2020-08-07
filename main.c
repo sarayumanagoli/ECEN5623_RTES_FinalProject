@@ -6,6 +6,8 @@
  * Code Leverage: Sharpen transformation - http://ecee.colorado.edu/~ecen5623/ecen/ex/Linux/computer-vision/sharpen-psf/sharpen.c
  * 				  Capture - http://ecee.colorado.edu/~ecen5623/ecen/ex/Linux/computer-vision/simple-capture/capture.c
  *                Scheduler - http://ecee.colorado.edu/~ecen5623/ecen/ex/Linux/code/sequencer_generic/seqgen.c
+ *                Sending images over sockets - https://stackoverflow.com/questions/13097375/sending-images-over-sockets-in-c
+ * 				  						https://stackoverflow.com/questions/15445207/sending-image-jpeg-through-socket-in-c-linux
  */
 
 /*
@@ -66,7 +68,7 @@
 #define K 4.0
 #define PORT 8080
 #define RIGHT_FRAME 30
-#define HERTZ 1
+//#define HERTZ 1
 #define str_hres "640"
 #define str_vres "480"
 
@@ -300,6 +302,7 @@ void *Service_2(void *threadp)
         {
             dump_ppm((arr_img + ((S2Cnt) % 60)), g_size, framecnt, &frame_time);
             framecnt++;
+            if(socket_enable == 1)
             dump_flag = 1;
         }
         service2_endtime = time_ms();
