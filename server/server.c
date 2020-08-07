@@ -1,4 +1,12 @@
-/* Standard C Library Headers */
+/* 
+ * Edited by: Sarayu Managoli
+ * Author: Dr. Sam Siewert
+ * Overview: This file contains the source code for the server end of final project in the course ECEN5623 Real Time Operating Systems
+ * Board Used: Raspberry Pi 3+ 
+ * Code Leverage: Socket - https://www.geeksforgeeks.org/socket-programming-cc/
+ */
+
+//Header files
 #include <stdlib.h> 
 #include <netinet/in.h> 
 #include <string.h> 
@@ -7,24 +15,27 @@
 #include <sys/socket.h> 
 #include <syslog.h>
 
-/* Defines */
 #define PORT 8080
 
-int size;
-int imgnum = 1;
-char server_image[] = "recv00000000.ppm";
 
 int main(int argc, char const *argv[]) 
 { 
 	int sockfd,newsockfd,bytes_recieved;
 	struct sockaddr_in server_addr;
+	FILE *f;
 	int opt = 1;
-	int server_len = sizeof(server_addr);	
-	unsigned char buffer[921600];	
-	FILE *file_ptr;			
-	if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) == 0)
+	int img_start = 0;
+	int write_size = 0;
+	int server_len = sizeof(server_addr);
+	char server_image[] = "recv00000000.ppm";	
+	unsigned char image_buffer[921600];
+	int size;
+	int imgnum = 1;	
+				
+	sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	if(sockfd <= 0)
 	{
-		perror("socket failed");
+		syslog(LOG_ERR,"Socket function failed!");
 		exit(EXIT_FAILURE);
 	}
 
@@ -54,42 +65,51 @@ int main(int argc, char const *argv[])
 	
 	
 	newsockfd = accept(sockfd, (struct sockaddr *) &server_addr, (socklen_t *)&server_len);
-		syslog(LOG_INFO,"Accepting");
+	syslog(LOG_INFO,"Accepting");
 
-		if (newsockfd < 0)
-		{
-			syslog(LOG_ERR,"ERROR on accepting connection");
-			exit(EXIT_FAILURE);
-		}
+	if (newsockfd < 0)
+	{
+		syslog(LOG_ERR,"ERROR on accepting connection");
+		exit(EXIT_FAILURE);
+	}
 
-	int i = 0;
 
 	while(1)
 	{
 		size = 0;
 
-		do{
-			bytes_recieved = recv(newsockfd,(char *)&buffer, 921600,0);
+		do
+		{
+			bytes_recieved = recv(newsockfd,(char *)&image_buffer, 921600,0);
 			if(bytes_recieved == 0)
 				printf("\nNo bytes received\n");
 			else
 				size += bytes_recieved;
 
-			if(i == 0)
+			if(img_start == 0)
 			{
+				//the above condition is checked to indicate the start of the image file
+				img_start++;	
+				
+				//This definition is the same as that in dump_ppm function on the client side
 				snprintf(&server_image[4], 9, "%08d", imgnum);
 				strncat(&server_image[12], ".ppm", 5);
-				file_ptr = fopen(server_image,"w+");	
-				i++;							
+				
+				//w+ is used to append to an existing file
+				f = fopen(server_image,"w+");
+				if(f == NULL)
+				{
+					syslog(LOG_ERR,"Error opening image file");		
+				}							
 			}
 
-			int write_size = fwrite(buffer,1,bytes_recieved,file_ptr);		
-
-		}while(size < 921600);
-
-		fclose(file_ptr);
-		i = 0;
+			if(fwrite(image_buffer,1,bytes_recieved,f) == 0)
+			syslog(LOG_ERR,"Failed to write into the image buffer");		
+		}while(size < 921600); //Until all bytes are received
+		
+		img_start = 0;
 		imgnum++;
+		fclose(f);
 	}
 
 	return 0; 
