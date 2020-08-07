@@ -543,6 +543,7 @@ void *Sequencer(void *threadp)
             sequence_totaljitter += sequence_jitter;
             //printf("\nSequence total jitter = %lf ms\n",sequence_totaljitter);
         }
+        
 
         seqCnt++;
         
