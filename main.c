@@ -113,6 +113,12 @@ static FILE *f;
 unsigned char client_buf[921600];
 int send_count = 0;
 int socket_enable;
+char jitter_S1[] = "Image_Capture.csv";
+char jitter_S2[] = "Image_Dump.csv";
+char jitter_Seq[] = "Sequencer.csv";
+static FILE *S1;
+static FILE *S2;
+static FILE *Seq;
 
 static char            *dev_name;
 static enum io_method   io = IO_METHOD_MMAP;
@@ -217,6 +223,9 @@ void *Service_1(void *threadp)
     double service1_jitter, service1_refjitter, service1_starttime_prev = 0;
     double service1_totaljitter = 0;
     
+    S1 = fopen(jitter_S1,"w+");
+    fprintf(S1,"Frame Count,Start Time(in ms),End Time(in ms),Execution Time(in ms),Jitter(in ms)");
+    
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
@@ -243,12 +252,20 @@ void *Service_1(void *threadp)
         
         if(S1Cnt != 0)
         {
+            #ifdef HERTZ
             service1_jitter = (service1_starttime_prev + 1000) - service1_starttime;
+            #else
+            service1_jitter = (service1_starttime_prev + 100) - service1_starttime;
+            #endif
             service1_totaljitter += service1_jitter;
         }
         
+        if(S1Cnt >= RIGHT_FRAME)
+            fprintf(S1,"\n%d,%lf,%lf,%lf,%lf",(S1Cnt-RIGHT_FRAME+1),service1_starttime,service1_endtime,service1_time,service1_jitter);
+        
         S1Cnt++;
         syslog(LOG_INFO,"S1Cnt = %d",S1Cnt);
+    
         
         for(int i=0;i<921600;i++)
         {
@@ -287,6 +304,9 @@ void *Service_2(void *threadp)
     double service2_wcet = 0;
     double service2_totaltime = 0;
     threadParams_t *threadParams = (threadParams_t *)threadp;
+    
+    S2 = fopen(jitter_S2,"w+");
+    fprintf(S2,"Frame Count,Start Time(in ms),End Time(in ms),Execution Time(in ms),Jitter(in ms)");
 
     clock_gettime(MY_CLOCK_TYPE, &current_time_val); current_realtime=realtime(&current_time_val);
     syslog(LOG_CRIT, "S2 thread @ sec=%6.9lf\n", current_realtime-start_realtime);
@@ -314,9 +334,16 @@ void *Service_2(void *threadp)
         
         if(service2_wcet < service2_time) service2_wcet = service2_time;
         
+        if(S2Cnt >= RIGHT_FRAME)
+            fprintf(S2,"\n%d,%lf,%lf,%lf,%lf",(S2Cnt-RIGHT_FRAME+1),service2_starttime,service2_endtime,service2_time,service2_jitter);
+        
         if(S2Cnt != 0) 
         {
+            #ifdef HERTZ
             service2_jitter = (service2_starttime_prev + 1000) - service2_starttime;
+            #else
+            service2_jitter = (service2_starttime_prev + 100) - service2_starttime;
+            #endif
             service2_totaljitter += service2_jitter;
         }
         
@@ -416,7 +443,11 @@ void *Service_3(void *threadp)
         
         if(S3Cnt != 0) 
         {
-            service3_jitter = (service3_starttime_prev + 1000) - service3_starttime; //1Hz = 1000ms
+            #ifdef HERTZ
+            service3_jitter = (service3_starttime_prev + 1000) - service3_starttime;
+            #else
+            service3_jitter = (service3_starttime_prev + 100) - service3_starttime;
+            #endif
             service3_totaljitter += service3_jitter;
         }
          S3Cnt++;
@@ -465,6 +496,10 @@ void *Sequencer(void *threadp)
     double sequence_wcet = 0;
     double sequence_totaltime = 0;
     int seqCnt=0;
+    
+    Seq = fopen(jitter_Seq,"w+");
+    fprintf(Seq,"Frame Count,Start Time(in ms),End Time(in ms),Execution Time(in ms),Jitter(in ms)");
+    
     threadParams_t *threadParams = (threadParams_t *)threadp;
 
  
@@ -531,9 +566,16 @@ void *Sequencer(void *threadp)
         
         if(sequence_wcet < sequence_time) sequence_wcet = sequence_time;
         
+        if(seqCnt >= RIGHT_FRAME)
+            fprintf(Seq,"\n%d,%lf,%lf,%lf,%lf",(seqCnt-RIGHT_FRAME+1),sequence_starttime,sequence_endtime,sequence_time,sequence_jitter);
+        
         if(seqCnt != 0)
         {
-            sequence_jitter = (sequence_starttime_prev + 1000) - sequence_starttime; 
+            #ifdef HERTZ
+            sequence_jitter = (sequence_starttime_prev + 1000) - sequence_starttime;
+            #else
+            sequence_jitter = (sequence_starttime_prev + 100) - sequence_starttime;
+            #endif
             sequence_totaljitter += sequence_jitter;
         }
         
@@ -1375,7 +1417,7 @@ int main(int argc, char **argv)
     if(socket_enable == 1)
     {
         CPU_ZERO(&threadcpu);
-        CPU_SET(3, &threadcpu);
+        CPU_SET(2, &threadcpu);
         
         rc=pthread_attr_setaffinity_np(&rt_sched_attr[3], sizeof(cpu_set_t), &threadcpu);
         rt_param[3].sched_priority=rt_max_prio - 3;
@@ -1394,6 +1436,10 @@ int main(int argc, char **argv)
     uninit_device();
     close_device();
     fprintf(stderr, "\n");
+
+    fclose(S1);
+    fclose(S2);
+    fclose(Seq);
 
     return 0;
 }

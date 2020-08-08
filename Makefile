@@ -18,6 +18,7 @@ clean:
 	-rm -f *.o *.d
 	-rm -f main
 	-rm -f *.ppm
+	-rm -f *.csv
 
 distclean:
 	-rm -f *.o *.d
